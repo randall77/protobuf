@@ -39,8 +39,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"reflect"
+	"unsafe"
 )
 
 // errOverflow is returned when an integer is too large to be represented.
@@ -967,4 +969,309 @@ func (o *Buffer) dec_slice_struct(p *Properties, is_group bool, base structPoint
 	o.index = oi
 
 	return err
+}
+
+type UnpackMessageInfo struct {
+	// Function to make a new message of this type
+	Make func() unsafe.Pointer // TODO: exposes unsafe!  Return uintptr instead?
+
+	// Field information indexed by tag #
+	Dense  []UnpackFieldInfo
+	Sparse map[uint64]UnpackFieldInfo // TODO: populate this
+
+	// Offset of unrecognized byte slice
+	// For proto3, set to a sentinal value of 1.
+	UnrecognizedOffset uintptr
+}
+type UnpackFieldInfo struct {
+	// offset of the field in the proto message structure.
+	Offset uintptr
+
+	// function which knows how to unpack the field.
+	// b: data (after tag+wire type have been read)
+	// f: pointer to field
+	// sub: information about the submessage/group (if any)
+	// returns unused data
+	Unpack func(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte
+
+	// For message (& group?) types, the data for the submessage/group. Nil otherwise.
+	Sub *UnpackMessageInfo
+}
+
+// TODO: we could encode the above structures in a compact form.
+// Make: ?
+// Dense/Sparse: add a slice of structures like
+//  byte: delta offset from last field
+//  byte: unpack function ID
+//  zigzag? varint: delta tag number from last field
+//  submessage: align to 4/8, pointer (only present for message/group fields)
+
+// This slice of bytes is an invalid varint.
+// Used to indicate an error on return.
+var errorData = [...]byte{128}
+
+func UnpackDouble_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 8 {
+		return errorData[:]
+	}
+	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
+	*(**float64)(f) = &v
+	return b[8:]
+}
+
+func UnpackDouble_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 8 {
+		return errorData[:]
+	}
+	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
+	*(*float64)(f) = v
+	return b[8:]
+}
+
+func UnpackDouble_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 8 {
+		return errorData[:]
+	}
+	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
+	*(*[]float64)(f) = append(*(*[]float64)(f), v)
+	return b[8:]
+}
+
+func UnpackInt64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int64(x)
+	*(**int64)(f) = &v
+	return b
+}
+
+func UnpackInt64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int64(x)
+	*(*int64)(f) = v
+	return b
+}
+
+func UnpackInt64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int64(x)
+	*(*[]int64)(f) = append(*(*[]int64)(f), v)
+	return b
+}
+
+func UnpackInt32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x)
+	*(**int32)(f) = &v
+	return b
+}
+
+func UnpackInt32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x)
+	*(*int32)(f) = v
+	return b
+}
+
+func UnpackInt32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x)
+	*(*[]int32)(f) = append(*(*[]int32)(f), v)
+	return b
+}
+
+func UnpackFixed32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	*(**uint32)(f) = &v
+	return b[4:]
+}
+
+func UnpackFixed32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	*(*uint32)(f) = v
+	return b[4:]
+}
+
+func UnpackFixed32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	*(*[]uint32)(f) = append(*(*[]uint32)(f), v)
+	return b[4:]
+}
+
+func UnpackString_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	s := string(b[:x])
+	*(**string)(f) = &s
+	return b[x:]
+}
+
+func UnpackString_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	s := string(b[:x])
+	*(*string)(f) = s
+	return b[x:]
+}
+
+func UnpackString_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	s := string(b[:x])
+	*(*[]string)(f) = append(*(*[]string)(f), s)
+	return b[x:]
+}
+
+func UnpackMessage(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	m := sub.Make()
+	err := UnmarshalMsg(b[:x], m, sub)
+	if err != nil {
+		// TODO: propagate error somehow?
+		return errorData[:]
+	}
+	*(*unsafe.Pointer)(f) = m
+	return b[x:]
+}
+
+func UnpackMessage_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	m := sub.Make()
+	err := UnmarshalMsg(b[:x], m, sub)
+	if err != nil {
+		// TODO: propagate error somehow?
+		return errorData[:]
+	}
+	*(*[]unsafe.Pointer)(f) = append(*(*[]unsafe.Pointer)(f), m)
+	return b[x:]
+}
+
+func UnmarshalMsg(b []byte, m unsafe.Pointer, u *UnpackMessageInfo) error {
+	for len(b) > 0 {
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return io.ErrUnexpectedEOF
+		}
+		tag := x >> 3
+		var f UnpackFieldInfo
+		if tag < uint64(len(u.Dense)) {
+			f = u.Dense[tag]
+		} else {
+			f = u.Sparse[tag]
+		}
+		if fn := f.Unpack; fn != nil {
+			b = fn(b[n:], unsafe.Pointer(uintptr(m)+f.Offset), f.Sub)
+			continue
+		}
+
+		// Unknown tag.
+		if u.UnrecognizedOffset == 1 {
+			// proto3, don't keep unrecognized data.  Just skip it.
+			b = b[n:]
+			// Use wire type to skip data.
+			switch x & 7 {
+			case WireVarint:
+				_, k := DecodeVarint(b)
+				b = b[k:]
+			case WireFixed32:
+				b = b[4:]
+			case WireFixed64:
+				b = b[8:]
+			case WireBytes:
+				m, k := DecodeVarint(b)
+				b = b[uint64(k)+m:]
+			case WireStartGroup:
+				// TODO
+			}
+		} else {
+			// proto2, keep unrecognized data around.
+			z := (*[]byte)(unsafe.Pointer(uintptr(m) + u.UnrecognizedOffset))
+			*z = append(*z, b[:n]...) // tag value
+			b = b[n:]
+			// Use wire type to skip data.
+			switch x & 7 {
+			case WireVarint:
+				_, k := DecodeVarint(b)
+				*z = append(*z, b[:k]...)
+				b = b[k:]
+			case WireFixed32:
+				*z = append(*z, b[:4]...)
+				b = b[4:]
+			case WireFixed64:
+				*z = append(*z, b[:8]...)
+				b = b[8:]
+			case WireBytes:
+				m, k := DecodeVarint(b)
+				*z = append(*z, b[:uint64(k)+m]...)
+				b = b[uint64(k)+m:]
+			case WireStartGroup:
+				// TODO
+			}
+		}
+	}
+	return nil
 }
