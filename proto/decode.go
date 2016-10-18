@@ -1037,6 +1037,33 @@ func UnpackDouble_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[8:]
 }
 
+func UnpackFloat_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
+	*(**float32)(f) = &v
+	return b[4:]
+}
+
+func UnpackFloat_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
+	*(*float32)(f) = v
+	return b[4:]
+}
+
+func UnpackFloat_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
+	*(*[]float32)(f) = append(*(*[]float32)(f), v)
+	return b[4:]
+}
+
 func UnpackInt64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
@@ -1066,6 +1093,39 @@ func UnpackInt64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x)
+	*(*[]int64)(f) = append(*(*[]int64)(f), v)
+	return b
+}
+
+func UnpackSint64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int64(x>>1) ^ int64(x)<<63>>63
+	*(**int64)(f) = &v
+	return b
+}
+
+func UnpackSint64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int64(x>>1) ^ int64(x)<<63>>63
+	*(*int64)(f) = v
+	return b
+}
+
+func UnpackSint64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int64(x>>1) ^ int64(x)<<63>>63
 	*(*[]int64)(f) = append(*(*[]int64)(f), v)
 	return b
 }
@@ -1103,6 +1163,39 @@ func UnpackInt32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b
 }
 
+func UnpackSint32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x>>1) ^ int32(x)<<31>>31
+	*(**int32)(f) = &v
+	return b
+}
+
+func UnpackSint32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x>>1) ^ int32(x)<<31>>31
+	*(*int32)(f) = v
+	return b
+}
+
+func UnpackSint32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x>>1) ^ int32(x)<<31>>31
+	*(*[]int32)(f) = append(*(*[]int32)(f), v)
+	return b
+}
+
 func UnpackFixed32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 4 {
 		return errorData[:]
@@ -1128,6 +1221,65 @@ func UnpackFixed32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 	*(*[]uint32)(f) = append(*(*[]uint32)(f), v)
 	return b[4:]
+}
+
+func UnpackEnum_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	// TODO: do we need to validate that the enum is in range?
+	v := int32(x)
+	*(**int32)(f) = &v
+	return b
+}
+
+func UnpackEnum_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x)
+	*(*int32)(f) = v
+	return b
+}
+
+func UnpackBool_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 1 {
+		return errorData[:]
+	}
+	var v bool
+	if b[0] != 0 {
+		v = true
+	}
+	*(**bool)(f) = &v
+	return b[1:]
+}
+
+func UnpackBool_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 1 {
+		return errorData[:]
+	}
+	var v bool
+	if b[0] != 0 {
+		v = true
+	}
+	*(*bool)(f) = v
+	return b[1:]
+}
+
+func UnpackBool_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 1 {
+		return errorData[:]
+	}
+	var v bool
+	if b[0] != 0 {
+		v = true
+	}
+	*(*[]bool)(f) = append(*(*[]bool)(f), v)
+	return b[1:]
 }
 
 func UnpackString_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
@@ -1172,6 +1324,48 @@ func UnpackString_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[x:]
 }
 
+func UnpackBytes_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	s := b[:x]
+	*(**[]byte)(f) = &s
+	return b[x:]
+}
+
+func UnpackBytes_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	s := b[:x]
+	*(*[]byte)(f) = s
+	return b[x:]
+}
+
+func UnpackBytes_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	s := b[:x]
+	*(*[][]byte)(f) = append(*(*[][]byte)(f), s)
+	return b[x:]
+}
+
 func UnpackMessage(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
@@ -1210,13 +1404,50 @@ func UnpackMessage_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte 
 	return b[x:]
 }
 
+func UnpackGroup(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
+	i, j := FindEndGroup(b)
+	if i < 0 {
+		return errorData[:]
+	}
+	m := sub.Make()
+	err := UnmarshalMsg(b[:i], m, sub)
+	if err != nil {
+		// TODO: propagate error somehow?
+		return errorData[:]
+	}
+	*(*unsafe.Pointer)(f) = m
+	return b[j:]
+	// TODO: there's no way to check that the EndGroup has the correct
+	// matching tag to the StartGroup. Do we need to fail if they don't match?
+}
+
+func UnpackGroup_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
+	i, j := FindEndGroup(b)
+	if i < 0 {
+		return errorData[:]
+	}
+	m := sub.Make()
+	err := UnmarshalMsg(b[:i], m, sub)
+	if err != nil {
+		// TODO: propagate error somehow?
+		return errorData[:]
+	}
+	*(*[]unsafe.Pointer)(f) = append(*(*[]unsafe.Pointer)(f), m)
+	return b[j:]
+	// TODO: there's no way to check that the EndGroup has the correct
+	// matching tag to the StartGroup. Do we need to fail if they don't match?
+}
+
 func UnmarshalMsg(b []byte, m unsafe.Pointer, u *UnpackMessageInfo) error {
 	for len(b) > 0 {
+		// Read tag and wire type.
 		x, n := DecodeVarint(b)
 		if n == 0 {
 			return io.ErrUnexpectedEOF
 		}
 		tag := x >> 3
+
+		// Dispatch on the tag to one of the Unpack* functions above.
 		var f UnpackFieldInfo
 		if tag < uint64(len(u.Dense)) {
 			f = u.Dense[tag]
@@ -1244,8 +1475,9 @@ func UnmarshalMsg(b []byte, m unsafe.Pointer, u *UnpackMessageInfo) error {
 			case WireBytes:
 				m, k := DecodeVarint(b)
 				b = b[uint64(k)+m:]
-			case WireStartGroup:
-				// TODO
+			default:
+				// WireStartGroup, WireEndGroup not possible for proto3
+				return io.ErrUnexpectedEOF
 			}
 		} else {
 			// proto2, keep unrecognized data around.
@@ -1269,9 +1501,69 @@ func UnmarshalMsg(b []byte, m unsafe.Pointer, u *UnpackMessageInfo) error {
 				*z = append(*z, b[:uint64(k)+m]...)
 				b = b[uint64(k)+m:]
 			case WireStartGroup:
-				// TODO
+				_, i := FindEndGroup(b)
+				if i == -1 {
+					return io.ErrUnexpectedEOF
+				}
+				*z = append(*z, b[:i]...)
+				b = b[i:]
+			default:
+				return io.ErrUnexpectedEOF
 			}
 		}
 	}
 	return nil
+}
+
+// FindEndGroup finds the index of the next EndGroup tag.
+// Groups may be nested, so the "next" EndGroup tag is the first
+// unpaired EndGroup.
+// FindEndGroup returns the indexes of the start and end of the EndGroup tag.
+// Returns (-1,-1) if it can't find one.
+func FindEndGroup(b []byte) (int, int) {
+	depth := 1
+	i := 0
+	for {
+		x, n := DecodeVarint(b[i:])
+		if n == 0 {
+			return -1, -1
+		}
+		j := i
+		i += n
+		switch x & 7 {
+		case WireVarint:
+			_, k := DecodeVarint(b[i:])
+			if k == 0 {
+				return -1, -1
+			}
+			i += k
+		case WireFixed32:
+			if i+4 > len(b) {
+				return -1, -1
+			}
+			i += 4
+		case WireFixed64:
+			if i+8 > len(b) {
+				return -1, -1
+			}
+			i += 8
+		case WireBytes:
+			m, k := DecodeVarint(b[i:])
+			if k == 0 {
+				return -1, -1
+			}
+			i += k
+			if i+int(m) > len(b) {
+				return -1, -1
+			}
+			i += int(m)
+		case WireStartGroup:
+			depth++
+		case WireEndGroup:
+			depth--
+			if depth == 0 {
+				return j, i
+			}
+		}
+	}
 }

@@ -80,19 +80,31 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := uint64(x)")
+		case descriptor.FieldDescriptorProto_TYPE_SINT64:
+			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+			g.P("b = b[n:]")
+			g.P("v := int64(x>>1) ^ int64(x)<<63>>63")
 		case descriptor.FieldDescriptorProto_TYPE_INT32:
 			g.P("x, n = proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := int32(x)")
-		case descriptor.FieldDescriptorProto_TYPE_FIXED64:
-			g.P("if len(b) < 8 { return proto.ErrInternalBadWireType }")
-			g.P("v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56")
-			g.P("b = b[8:]")
-		case descriptor.FieldDescriptorProto_TYPE_FIXED32:
-			g.P("if len(b) < 4 { return proto.ErrInternalBadWireType }")
-			g.P("v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24")
-			g.P("b = b[4:]")
+		case descriptor.FieldDescriptorProto_TYPE_UINT32:
+			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+			g.P("b = b[n:]")
+			g.P("v := uint32(x)")
+		case descriptor.FieldDescriptorProto_TYPE_SINT32:
+			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+			g.P("b = b[n:]")
+			g.P("v := int32(x>>1) ^ int32(x)<<31>>31")
+		case descriptor.FieldDescriptorProto_TYPE_ENUM:
+			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+			g.P("b = b[n:]")
+			g.P("v := ", g.TypeName(g.ObjectNamed(field.GetTypeName())), "(x)")
 		case descriptor.FieldDescriptorProto_TYPE_BOOL:
 			g.P("if len(b) == 0 { return proto.ErrInternalBadWireType }")
 			g.P("v := false")
@@ -102,6 +114,22 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.Out()
 			g.P("}")
 			g.P("b = b[1:]")
+		case descriptor.FieldDescriptorProto_TYPE_FIXED64:
+			g.P("if len(b) < 8 { return proto.ErrInternalBadWireType }")
+			g.P("v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56")
+			g.P("b = b[8:]")
+		case descriptor.FieldDescriptorProto_TYPE_SFIXED64:
+			g.P("if len(b) < 8 { return proto.ErrInternalBadWireType }")
+			g.P("v := int64(b[0]) | int64(b[1])<<8 | int64(b[2])<<16 | int64(b[3])<<24 | int64(b[4])<<32 | int64(b[5])<<40 | int64(b[6])<<48 | int64(b[7])<<56")
+			g.P("b = b[8:]")
+		case descriptor.FieldDescriptorProto_TYPE_FIXED32:
+			g.P("if len(b) < 4 { return proto.ErrInternalBadWireType }")
+			g.P("v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24")
+			g.P("b = b[4:]")
+		case descriptor.FieldDescriptorProto_TYPE_SFIXED32:
+			g.P("if len(b) < 4 { return proto.ErrInternalBadWireType }")
+			g.P("v := int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24")
+			g.P("b = b[4:]")
 		case descriptor.FieldDescriptorProto_TYPE_STRING:
 			g.P("x, n = proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
@@ -109,8 +137,13 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
 			g.P("v := string(b[:x])")
 			g.P("b = b[x:]")
-		case descriptor.FieldDescriptorProto_TYPE_GROUP:
-			//TODO
+		case descriptor.FieldDescriptorProto_TYPE_BYTES:
+			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+			g.P("b = b[n:]")
+			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
+			g.P("v := b[:x]") // TODO: copy b[:x]?
+			g.P("b = b[x:]")
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 			g.P("x, n = proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
@@ -119,6 +152,13 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("var v ", g.TypeName(g.ObjectNamed(field.GetTypeName())))
 			g.P("if err := v.MergeFullCustom(b[:x]); err != nil { return err }")
 			g.P("b = b[x:]")
+			pointer = true
+		case descriptor.FieldDescriptorProto_TYPE_GROUP:
+			g.P("i, j := proto.FindEndGroup(b)")
+			g.P("if i < 0 { return proto.ErrInternalBadWireType }")
+			g.P("var v ", g.TypeName(g.ObjectNamed(field.GetTypeName())))
+			g.P("if err := v.MergeFullCustom(b[:i]); err != nil { return err }")
+			g.P("b = b[j:]")
 			pointer = true
 		}
 
@@ -141,10 +181,12 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 		g.Out()
 	}
 	g.P("default:")
-	// TODO
+	g.In()
+	g.P("  return proto.ErrInternalBadWireType")
+	// TODO: instead of returning an error, do:
 	// b = proto.ParseUnknown(x, &m.XXX_unrecognized, b)
 	//  switch on wire type (x&7), put varint.encode(x) + data in &m.XXX_unrecognized
-	// return bytes at end.
+	g.Out()
 	g.Out()
 	g.P("}")
 	g.Out()
@@ -158,7 +200,6 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	typeName := message.TypeName()
 	ccTypeName := CamelCaseSlice(typeName)
-
 	g.P("var XXX_Unpack_", ccTypeName, " = proto.UnpackMessageInfo {")
 	g.In()
 	g.P("Make: func() unsafe.Pointer {")
@@ -190,26 +231,46 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 		case descriptor.FieldDescriptorProto_TYPE_INT64:
 			fn = "Int64"
 		case descriptor.FieldDescriptorProto_TYPE_UINT64:
-			fn = "Uint64"
+			fn = "Int64"
+		case descriptor.FieldDescriptorProto_TYPE_SINT64:
+			fn = "Sint64"
 		case descriptor.FieldDescriptorProto_TYPE_INT32:
 			fn = "Int32"
+		case descriptor.FieldDescriptorProto_TYPE_UINT32:
+			fn = "Int32"
+		case descriptor.FieldDescriptorProto_TYPE_SINT32:
+			fn = "Sint32"
+		case descriptor.FieldDescriptorProto_TYPE_ENUM:
+			fn = "Enum"
+		case descriptor.FieldDescriptorProto_TYPE_BOOL:
+			fn = "Bool"
 		case descriptor.FieldDescriptorProto_TYPE_FIXED64:
+			fn = "Fixed64"
+		case descriptor.FieldDescriptorProto_TYPE_SFIXED64:
 			fn = "Fixed64"
 		case descriptor.FieldDescriptorProto_TYPE_FIXED32:
 			fn = "Fixed32"
-		case descriptor.FieldDescriptorProto_TYPE_BOOL:
-			fn = "Bool"
+		case descriptor.FieldDescriptorProto_TYPE_SFIXED32:
+			fn = "Fixed32"
 		case descriptor.FieldDescriptorProto_TYPE_STRING:
 			fn = "String"
+		case descriptor.FieldDescriptorProto_TYPE_BYTES:
+			fn = "Bytes"
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 			fn = "Message"
 			if suffix != "_R" {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
 			}
 			g.P("Sub: &XXX_Unpack_", g.TypeName(g.ObjectNamed(field.GetTypeName())), ",")
+		case descriptor.FieldDescriptorProto_TYPE_GROUP:
+			fn = "Group"
+			if suffix != "_R" {
+				suffix = "" // Don't need to distinguish proto2 and proto3.
+			}
+			g.P("Sub: &XXX_Unpack_", g.TypeName(g.ObjectNamed(field.GetTypeName())), ",")
 		default:
-			// TODO: group, all v2 kinds (bytes, uint32, enum, sfixed*, sint*)
-			panic("not handled yet")
+			// TODO: all v2 kinds (bytes, uint32, sfixed*, sint*)
+			panic("not handled yet: " + field.GetName())
 		}
 		g.P("Unpack: proto.Unpack", fn, suffix, ",")
 
@@ -219,6 +280,7 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.Out()
 	g.P("},")
 	g.P("Sparse: nil,")
+	// TODO: for tags which are large, put them in the sparse map instead of the dense map.
 	if message.proto3() {
 		g.P("UnrecognizedOffset: 1,") // proto3 sentinel
 	} else {
@@ -227,6 +289,9 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.Out()
 	g.P("}")
 
+	// Eventually we would just call this function Unmarshal.
+	// Or we could register the proto name -> unpack info mapping, and get
+	// rid of this function entirely.
 	g.P("func (m *", ccTypeName, ") MergeTableDriven(b []byte) error {")
 	g.In()
 	g.P("return proto.UnmarshalMsg(b, unsafe.Pointer(m), &XXX_Unpack_", ccTypeName, ")")
