@@ -1246,6 +1246,17 @@ func UnpackEnum_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b
 }
 
+func UnpackEnum_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	v := int32(x)
+	*(*[]int32)(f) = append(*(*[]int32)(f), v)
+	return b
+}
+
 func UnpackBool_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 1 {
 		return errorData[:]

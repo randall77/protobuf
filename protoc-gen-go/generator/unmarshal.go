@@ -142,14 +142,26 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
-			g.P("v := b[:x]") // TODO: copy b[:x]?
+			g.P("v := make([]byte, x)")
+			g.P("copy(v, b)")
 			g.P("b = b[x:]")
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+			desc := g.ObjectNamed(field.GetTypeName())
+			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
+				// skip map data for now.
+				g.P("x, n = proto.DecodeVarint(b)")
+				g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+				g.P("b = b[n:]")
+				g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
+				g.P("b = b[x:]")
+				g.Out()
+				continue
+			}
 			g.P("x, n = proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
-			g.P("var v ", g.TypeName(g.ObjectNamed(field.GetTypeName())))
+			g.P("var v ", g.TypeName(desc))
 			g.P("if err := v.MergeFullCustom(b[:x]); err != nil { return err }")
 			g.P("b = b[x:]")
 			pointer = true
@@ -160,23 +172,39 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("if err := v.MergeFullCustom(b[:i]); err != nil { return err }")
 			g.P("b = b[j:]")
 			pointer = true
+		default:
+			panic("unknown type for field: " + field.GetName())
+		}
+
+		// Value to write.
+		v := "v"
+
+		// Which field it should be written to.
+		fname := CamelCase(field.GetName())
+
+		if field.OneofIndex != nil {
+			odp := message.OneofDecl[int(*field.OneofIndex)]
+			g.P("w := ", ccTypeName, "_", fname, "{", fname, ":v}")
+			v = "w"
+			pointer = true // oneofs are always pointers
+			fname = CamelCase(odp.GetName())
 		}
 
 		// Decide if we need to store v or &v.
-		if !message.proto3() && field.GetLabel() != descriptor.FieldDescriptorProto_LABEL_REPEATED {
+		if !message.proto3() && field.GetLabel() != descriptor.FieldDescriptorProto_LABEL_REPEATED && field.GetType() != descriptor.FieldDescriptorProto_TYPE_BYTES {
 			pointer = true
 		}
-		v := "v"
+
 		if pointer {
-			v = "&v"
+			v = "&" + v
 		}
 
 		// store value into message structure.
 		switch field.GetLabel() {
 		case descriptor.FieldDescriptorProto_LABEL_REPEATED:
-			g.P("m.", CamelCase(field.GetName()), "= append(m.", CamelCase(field.GetName()), ", ", v, ")")
+			g.P("m.", fname, "= append(m.", fname, ", ", v, ")")
 		case descriptor.FieldDescriptorProto_LABEL_REQUIRED, descriptor.FieldDescriptorProto_LABEL_OPTIONAL:
-			g.P("m.", CamelCase(field.GetName()), "= ", v)
+			g.P("m.", fname, "= ", v)
 		}
 		g.Out()
 	}
@@ -210,9 +238,22 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.P("Dense: []proto.UnpackFieldInfo {")
 	g.In()
 	for _, field := range message.Field {
+		if field.OneofIndex != nil {
+			// Treat oneof data as unrecognized
+			continue
+		}
+		if field.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
+			desc := g.ObjectNamed(field.GetTypeName())
+			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
+				// Treat map data as unrecognized
+				continue
+			}
+		}
+
 		g.P(int(field.GetNumber()), ": {")
 		g.In()
-		g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", CamelCase(field.GetName()), "),")
+		fname := CamelCase(field.GetName())
+		g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", fname, "),")
 		var suffix string
 		switch {
 		case field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED:
@@ -269,8 +310,7 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 			}
 			g.P("Sub: &XXX_Unpack_", g.TypeName(g.ObjectNamed(field.GetTypeName())), ",")
 		default:
-			// TODO: all v2 kinds (bytes, uint32, sfixed*, sint*)
-			panic("not handled yet: " + field.GetName())
+			panic("unknown type for field: " + field.GetName())
 		}
 		g.P("Unpack: proto.Unpack", fn, suffix, ",")
 

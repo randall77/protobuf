@@ -1364,6 +1364,7 @@ func (g *Generator) generateImports() {
 	g.P("var _ = ", g.Pkg["proto"], ".Marshal")
 	g.P("var _ = ", g.Pkg["fmt"], ".Errorf")
 	g.P("var _ = ", g.Pkg["math"], ".Inf")
+	g.P("var _ = ", g.Pkg["unsafe"], ".Pointer(nil)")
 	g.P()
 }
 
