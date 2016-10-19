@@ -35,7 +35,11 @@ Experiment for other techniques for unmarshaling a protobuf.
 
 package generator
 
-import "github.com/golang/protobuf/protoc-gen-go/descriptor"
+import (
+	"strings"
+
+	"github.com/golang/protobuf/protoc-gen-go/descriptor"
+)
 
 func (g *Generator) generateUnmarshalCode(message *Descriptor) {
 	g.generateUnmarshalFullCustom(message)
@@ -57,6 +61,10 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 	g.P("switch x>>3 {")
 	g.In()
 	for _, field := range message.Field {
+		// Which field we're updating.
+		// Note: not the field name for enums, that is fixed below.
+		fname := CamelCase(field.GetName())
+
 		g.P("case ", int(field.GetNumber()), ":")
 		g.In()
 		// parse value out of protocol buffer.
@@ -147,16 +155,6 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("b = b[x:]")
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 			desc := g.ObjectNamed(field.GetTypeName())
-			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
-				// skip map data for now.
-				g.P("x, n = proto.DecodeVarint(b)")
-				g.P("if n == 0 { return proto.ErrInternalBadWireType }")
-				g.P("b = b[n:]")
-				g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
-				g.P("b = b[x:]")
-				g.Out()
-				continue
-			}
 			g.P("x, n = proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
@@ -164,6 +162,48 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("var v ", g.TypeName(desc))
 			g.P("if err := v.MergeFullCustom(b[:x]); err != nil { return err }")
 			g.P("b = b[x:]")
+			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
+				// The message we just decoded corresponds to a map entry.
+				// Generate code to move the data from the message to the map.
+				// This gets ugly because of the smattering of * most places,
+				// but not everywhere.
+				keyField, valField := d.Field[0], d.Field[1]
+				keyType, _ := g.GoType(d, keyField)
+				valType, _ := g.GoType(d, valField)
+				var keyBase, valBase string
+				if message.proto3() {
+					keyBase = keyType
+					valBase = valType
+				} else {
+					keyBase = strings.TrimPrefix(keyType, "*")
+					switch *valField.Type {
+					case descriptor.FieldDescriptorProto_TYPE_ENUM:
+						valBase = strings.TrimPrefix(valType, "*")
+						g.RecordTypeUse(valField.GetTypeName())
+					case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+						valBase = valType
+						g.RecordTypeUse(valField.GetTypeName())
+					default:
+						valBase = strings.TrimPrefix(valType, "*")
+					}
+				}
+				g.P("if m.", fname, " == nil {")
+				g.In()
+				g.P("m.", fname, " = map[", keyBase, "]", valBase, "{}")
+				g.P("}")
+				g.Out()
+				keyStar := "*"
+				if keyType == keyBase {
+					keyStar = ""
+				}
+				valStar := "*"
+				if valType == valBase {
+					valStar = ""
+				}
+				g.P("m.", CamelCase(field.GetName()), "[", keyStar, "v.Key] = ", valStar, "v.Value")
+				g.Out()
+				continue
+			}
 			pointer = true
 		case descriptor.FieldDescriptorProto_TYPE_GROUP:
 			g.P("i, j := proto.FindEndGroup(b)")
@@ -178,9 +218,6 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 
 		// Value to write.
 		v := "v"
-
-		// Which field it should be written to.
-		fname := CamelCase(field.GetName())
 
 		if field.OneofIndex != nil {
 			odp := message.OneofDecl[int(*field.OneofIndex)]

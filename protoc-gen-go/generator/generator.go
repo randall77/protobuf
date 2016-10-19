@@ -1192,7 +1192,8 @@ func (g *Generator) generate(file *FileDescriptor) {
 	for _, desc := range g.file.desc {
 		// Don't generate virtual messages for maps.
 		if desc.GetOptions().GetMapEntry() {
-			continue
+			// Note: enabled for new parser
+			//continue
 		}
 		g.generateMessage(desc)
 	}
