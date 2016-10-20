@@ -1630,6 +1630,72 @@ func FindEndGroup(b []byte) (int, int) {
 			if depth == 0 {
 				return j, i
 			}
+		default:
+			return -1, -1
 		}
 	}
+}
+
+// SkipUnrecognized parses and skips any unrecognized tag.
+// b is the data stream (after the tag/wiretype has been parsed).
+// x is the tag/wiretype decoded from the byte stream.
+// u is the place to store the skipped data, or nil if that is not needed.
+// Returns the remaining unparsed bytes.
+func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
+	switch x & 7 {
+	case WireVarint:
+		_, k := DecodeVarint(b)
+		if k == 0 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, EncodeVarint(x)...)
+			*u = append(*u, b[:k]...)
+		}
+		return b[k:]
+	case WireFixed32:
+		if len(b) < 4 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, EncodeVarint(x)...)
+			*u = append(*u, b[:4]...)
+		}
+		return b[4:]
+	case WireFixed64:
+		if len(b) < 8 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, EncodeVarint(x)...)
+			*u = append(*u, b[:8]...)
+		}
+		return b[8:]
+	case WireBytes:
+		m, k := DecodeVarint(b)
+		if k == 0 {
+			return errorData[:]
+		}
+		if m > uint64(len(b)) {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, EncodeVarint(x)...)
+			*u = append(*u, b[:m+uint64(k)]...)
+		}
+		return b[m+uint64(k):]
+	case WireStartGroup:
+		i, j := FindEndGroup(b)
+		if j < 0 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, EncodeVarint(x)...)
+			*u = append(*u, b[:j]...)
+		}
+		return b[j:]
+	default:
+		return errorData[:]
+	}
+	// TODO: modify EncodeVarint to append to a slice?  That would avoid an unnecessary allocation.
 }

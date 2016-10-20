@@ -251,10 +251,11 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 	}
 	g.P("default:")
 	g.In()
-	g.P("  return proto.ErrInternalBadWireType")
-	// TODO: instead of returning an error, do:
-	// b = proto.ParseUnknown(x, &m.XXX_unrecognized, b)
-	//  switch on wire type (x&7), put varint.encode(x) + data in &m.XXX_unrecognized
+	if message.proto3() {
+		g.P("b = proto.SkipUnrecognized(b, x, nil)")
+	} else {
+		g.P("b = proto.SkipUnrecognized(b, x, &m.XXX_unrecognized)")
+	}
 	g.Out()
 	g.Out()
 	g.P("}")
@@ -285,9 +286,9 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 
 		if field.OneofIndex != nil {
 			odp := message.OneofDecl[int(*field.OneofIndex)]
-			dname := "is" + ccTypeName + "_" + odp.GetName()
+			dname := "is" + ccTypeName + "_" + CamelCase(odp.GetName())
 
-			g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", odp.GetName(), "),")
+			g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", CamelCase(odp.GetName()), "),")
 			// Use generated code for the unpacker for oneofs.
 			g.P("Unpack: func(b []byte, f unsafe.Pointer, i *proto.UnpackMessageInfo) []byte {")
 			g.In()
