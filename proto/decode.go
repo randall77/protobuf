@@ -994,7 +994,7 @@ type UnpackFieldInfo struct {
 	// returns unused data
 	Unpack func(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte
 
-	// For message (& group?) types, the data for the submessage/group. Nil otherwise.
+	// For message&group types, the info for the submessage/group. Nil otherwise.
 	Sub *UnpackMessageInfo
 }
 
@@ -1009,13 +1009,15 @@ type UnpackFieldInfo struct {
 // This slice of bytes is an invalid varint.
 // Used to indicate an error on return.
 var errorData = [...]byte{128}
+var ErrorData = [...]byte{128}
 
 func UnpackDouble_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	*(**float64)(f) = &v
+	g := (**float64)(f)
+	*g = &v
 	return b[8:]
 }
 
@@ -1024,7 +1026,8 @@ func UnpackDouble_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 		return errorData[:]
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	*(*float64)(f) = v
+	g := (*float64)(f)
+	*g = v
 	return b[8:]
 }
 
@@ -1033,7 +1036,8 @@ func UnpackDouble_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 		return errorData[:]
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	*(*[]float64)(f) = append(*(*[]float64)(f), v)
+	g := (*[]float64)(f)
+	*g = append(*g, v)
 	return b[8:]
 }
 
@@ -1042,7 +1046,8 @@ func UnpackFloat_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 		return errorData[:]
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	*(**float32)(f) = &v
+	g := (**float32)(f)
+	*g = &v
 	return b[4:]
 }
 
@@ -1051,7 +1056,8 @@ func UnpackFloat_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 		return errorData[:]
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	*(*float32)(f) = v
+	g := (*float32)(f)
+	*g = v
 	return b[4:]
 }
 
@@ -1060,7 +1066,8 @@ func UnpackFloat_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 		return errorData[:]
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	*(*[]float32)(f) = append(*(*[]float32)(f), v)
+	g := (*[]float32)(f)
+	*g = append(*g, v)
 	return b[4:]
 }
 
@@ -1071,7 +1078,8 @@ func UnpackInt64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x)
-	*(**int64)(f) = &v
+	g := (**int64)(f)
+	*g = &v
 	return b
 }
 
@@ -1082,7 +1090,8 @@ func UnpackInt64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x)
-	*(*int64)(f) = v
+	g := (*int64)(f)
+	*g = v
 	return b
 }
 
@@ -1093,7 +1102,8 @@ func UnpackInt64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x)
-	*(*[]int64)(f) = append(*(*[]int64)(f), v)
+	g := (*[]int64)(f)
+	*g = append(*g, v)
 	return b
 }
 
@@ -1104,7 +1114,8 @@ func UnpackSint64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
-	*(**int64)(f) = &v
+	g := (**int64)(f)
+	*g = &v
 	return b
 }
 
@@ -1115,7 +1126,8 @@ func UnpackSint64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
-	*(*int64)(f) = v
+	g := (*int64)(f)
+	*g = v
 	return b
 }
 
@@ -1126,7 +1138,8 @@ func UnpackSint64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
-	*(*[]int64)(f) = append(*(*[]int64)(f), v)
+	g := (*[]int64)(f)
+	*g = append(*g, v)
 	return b
 }
 
@@ -1137,7 +1150,8 @@ func UnpackInt32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x)
-	*(**int32)(f) = &v
+	g := (**int32)(f)
+	*g = &v
 	return b
 }
 
@@ -1148,7 +1162,8 @@ func UnpackInt32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x)
-	*(*int32)(f) = v
+	g := (*int32)(f)
+	*g = v
 	return b
 }
 
@@ -1159,7 +1174,8 @@ func UnpackInt32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x)
-	*(*[]int32)(f) = append(*(*[]int32)(f), v)
+	g := (*[]int32)(f)
+	*g = append(*g, v)
 	return b
 }
 
@@ -1170,7 +1186,8 @@ func UnpackSint32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
-	*(**int32)(f) = &v
+	g := (**int32)(f)
+	*g = &v
 	return b
 }
 
@@ -1181,7 +1198,8 @@ func UnpackSint32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
-	*(*int32)(f) = v
+	g := (*int32)(f)
+	*g = v
 	return b
 }
 
@@ -1192,35 +1210,9 @@ func UnpackSint32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
-	*(*[]int32)(f) = append(*(*[]int32)(f), v)
+	g := (*[]int32)(f)
+	*g = append(*g, v)
 	return b
-}
-
-func UnpackFixed32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	*(**uint32)(f) = &v
-	return b[4:]
-}
-
-func UnpackFixed32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	*(*uint32)(f) = v
-	return b[4:]
-}
-
-func UnpackFixed32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	*(*[]uint32)(f) = append(*(*[]uint32)(f), v)
-	return b[4:]
 }
 
 func UnpackEnum_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
@@ -1231,7 +1223,8 @@ func UnpackEnum_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	b = b[n:]
 	// TODO: do we need to validate that the enum is in range?
 	v := int32(x)
-	*(**int32)(f) = &v
+	g := (**int32)(f)
+	*g = &v
 	return b
 }
 
@@ -1242,7 +1235,8 @@ func UnpackEnum_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x)
-	*(*int32)(f) = v
+	g := (*int32)(f)
+	*g = v
 	return b
 }
 
@@ -1253,7 +1247,8 @@ func UnpackEnum_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	}
 	b = b[n:]
 	v := int32(x)
-	*(*[]int32)(f) = append(*(*[]int32)(f), v)
+	g := (*[]int32)(f)
+	*g = append(*g, v)
 	return b
 }
 
@@ -1265,7 +1260,8 @@ func UnpackBool_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if b[0] != 0 {
 		v = true
 	}
-	*(**bool)(f) = &v
+	g := (**bool)(f)
+	*g = &v
 	return b[1:]
 }
 
@@ -1277,7 +1273,8 @@ func UnpackBool_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if b[0] != 0 {
 		v = true
 	}
-	*(*bool)(f) = v
+	g := (*bool)(f)
+	*g = v
 	return b[1:]
 }
 
@@ -1289,8 +1286,69 @@ func UnpackBool_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if b[0] != 0 {
 		v = true
 	}
-	*(*[]bool)(f) = append(*(*[]bool)(f), v)
+	g := (*[]bool)(f)
+	*g = append(*g, v)
 	return b[1:]
+}
+
+func UnpackFixed64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 8 {
+		return errorData[:]
+	}
+	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+	g := (**uint64)(f)
+	*g = &v
+	return b[8:]
+}
+
+func UnpackFixed64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 8 {
+		return errorData[:]
+	}
+	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+	g := (*uint64)(f)
+	*g = v
+	return b[8:]
+}
+
+func UnpackFixed64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 8 {
+		return errorData[:]
+	}
+	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+	g := (*[]uint64)(f)
+	*g = append(*g, v)
+	return b[8:]
+}
+
+func UnpackFixed32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	g := (**uint32)(f)
+	*g = &v
+	return b[4:]
+}
+
+func UnpackFixed32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	g := (*uint32)(f)
+	*g = v
+	return b[4:]
+}
+
+func UnpackFixed32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+	if len(b) < 4 {
+		return errorData[:]
+	}
+	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	g := (*[]uint32)(f)
+	*g = append(*g, v)
+	return b[4:]
 }
 
 func UnpackString_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
@@ -1302,8 +1360,9 @@ func UnpackString_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	s := string(b[:x])
-	*(**string)(f) = &s
+	v := string(b[:x])
+	g := (**string)(f)
+	*g = &v
 	return b[x:]
 }
 
@@ -1316,8 +1375,9 @@ func UnpackString_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	s := string(b[:x])
-	*(*string)(f) = s
+	v := string(b[:x])
+	g := (*string)(f)
+	*g = v
 	return b[x:]
 }
 
@@ -1330,12 +1390,13 @@ func UnpackString_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	s := string(b[:x])
-	*(*[]string)(f) = append(*(*[]string)(f), s)
+	v := string(b[:x])
+	g := (*[]string)(f)
+	*g = append(*g, v)
 	return b[x:]
 }
 
-func UnpackBytes_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackBytes(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -1344,22 +1405,10 @@ func UnpackBytes_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	s := b[:x]
-	*(**[]byte)(f) = &s
-	return b[x:]
-}
-
-func UnpackBytes_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	s := b[:x]
-	*(*[]byte)(f) = s
+	v := make([]byte, x)
+	copy(v, b)
+	g := (*[]byte)(f)
+	*g = v
 	return b[x:]
 }
 
@@ -1372,8 +1421,10 @@ func UnpackBytes_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	s := b[:x]
-	*(*[][]byte)(f) = append(*(*[][]byte)(f), s)
+	v := make([]byte, x)
+	copy(v, b)
+	g := (*[][]byte)(f)
+	*g = append(*g, v)
 	return b[x:]
 }
 
@@ -1386,13 +1437,14 @@ func UnpackMessage(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	m := sub.Make()
-	err := UnmarshalMsg(b[:x], m, sub)
+	v := sub.Make()
+	err := UnmarshalMsg(b[:x], v, sub)
 	if err != nil {
 		// TODO: propagate error somehow?
 		return errorData[:]
 	}
-	*(*unsafe.Pointer)(f) = m
+	g := (*unsafe.Pointer)(f)
+	*g = v
 	return b[x:]
 }
 
@@ -1405,46 +1457,49 @@ func UnpackMessage_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte 
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
-	m := sub.Make()
-	err := UnmarshalMsg(b[:x], m, sub)
+	v := sub.Make()
+	err := UnmarshalMsg(b[:x], v, sub)
 	if err != nil {
 		// TODO: propagate error somehow?
 		return errorData[:]
 	}
-	*(*[]unsafe.Pointer)(f) = append(*(*[]unsafe.Pointer)(f), m)
+	g := (*[]unsafe.Pointer)(f)
+	*g = append(*g, v)
 	return b[x:]
 }
 
 func UnpackGroup(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
-	i, j := FindEndGroup(b)
-	if i < 0 {
+	x, y := FindEndGroup(b)
+	if x < 0 {
 		return errorData[:]
 	}
-	m := sub.Make()
-	err := UnmarshalMsg(b[:i], m, sub)
+	v := sub.Make()
+	err := UnmarshalMsg(b[:x], v, sub)
 	if err != nil {
 		// TODO: propagate error somehow?
 		return errorData[:]
 	}
-	*(*unsafe.Pointer)(f) = m
-	return b[j:]
+	g := (*unsafe.Pointer)(f)
+	*g = v
+	return b[y:]
 	// TODO: there's no way to check that the EndGroup has the correct
 	// matching tag to the StartGroup. Do we need to fail if they don't match?
 }
 
 func UnpackGroup_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
-	i, j := FindEndGroup(b)
-	if i < 0 {
+	x, y := FindEndGroup(b)
+	if x < 0 {
 		return errorData[:]
 	}
-	m := sub.Make()
-	err := UnmarshalMsg(b[:i], m, sub)
+	v := sub.Make()
+	err := UnmarshalMsg(b[:x], v, sub)
 	if err != nil {
 		// TODO: propagate error somehow?
 		return errorData[:]
 	}
-	*(*[]unsafe.Pointer)(f) = append(*(*[]unsafe.Pointer)(f), m)
-	return b[j:]
+	g := (*[]unsafe.Pointer)(f)
+	*g = append(*g, v)
+	return b[y:]
 	// TODO: there's no way to check that the EndGroup has the correct
 	// matching tag to the StartGroup. Do we need to fail if they don't match?
 }

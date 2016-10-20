@@ -221,7 +221,11 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 
 		if field.OneofIndex != nil {
 			odp := message.OneofDecl[int(*field.OneofIndex)]
-			g.P("w := ", ccTypeName, "_", fname, "{", fname, ":v}")
+			if pointer {
+				g.P("w := ", ccTypeName, "_", fname, "{", fname, ":&v}")
+			} else {
+				g.P("w := ", ccTypeName, "_", fname, "{", fname, ":v}")
+			}
 			v = "w"
 			pointer = true // oneofs are always pointers
 			fname = CamelCase(odp.GetName())
@@ -275,10 +279,6 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.P("Dense: []proto.UnpackFieldInfo {")
 	g.In()
 	for _, field := range message.Field {
-		if field.OneofIndex != nil {
-			// Treat oneof data as unrecognized
-			continue
-		}
 		if field.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
 			desc := g.ObjectNamed(field.GetTypeName())
 			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
@@ -290,7 +290,69 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 		g.P(int(field.GetNumber()), ": {")
 		g.In()
 		fname := CamelCase(field.GetName())
+
+		if field.OneofIndex != nil {
+			odp := message.OneofDecl[int(*field.OneofIndex)]
+			dname := "is" + ccTypeName + "_" + odp.GetName()
+
+			g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", odp.GetName(), "),")
+			// Use generated code for the unpacker for oneofs.
+			g.P("Unpack: func(b []byte, f unsafe.Pointer, i *proto.UnpackMessageInfo) []byte {")
+			g.In()
+			g.P("var v ", ccTypeName, "_", fname)
+			var typ string
+
+			switch field.GetType() {
+			case descriptor.FieldDescriptorProto_TYPE_DOUBLE:
+				typ = "Float64_3"
+			case descriptor.FieldDescriptorProto_TYPE_FLOAT:
+				typ = "Float32_3"
+			case descriptor.FieldDescriptorProto_TYPE_INT64:
+				typ = "Int64_3"
+			case descriptor.FieldDescriptorProto_TYPE_UINT64:
+				typ = "Int64_3"
+			case descriptor.FieldDescriptorProto_TYPE_SINT64:
+				typ = "Sint64_3"
+			case descriptor.FieldDescriptorProto_TYPE_INT32:
+				typ = "Int32_3"
+			case descriptor.FieldDescriptorProto_TYPE_UINT32:
+				typ = "Int32_3"
+			case descriptor.FieldDescriptorProto_TYPE_SINT32:
+				typ = "Sint64_3"
+			case descriptor.FieldDescriptorProto_TYPE_ENUM:
+				typ = "Enum_3"
+			case descriptor.FieldDescriptorProto_TYPE_BOOL:
+				typ = "Bool_3"
+			case descriptor.FieldDescriptorProto_TYPE_FIXED64:
+				typ = "Fixed64_3"
+			case descriptor.FieldDescriptorProto_TYPE_SFIXED64:
+				typ = "Fixed64_3"
+			case descriptor.FieldDescriptorProto_TYPE_FIXED32:
+				typ = "Fixed32_3"
+			case descriptor.FieldDescriptorProto_TYPE_SFIXED32:
+				typ = "Fixed32_3"
+			case descriptor.FieldDescriptorProto_TYPE_STRING:
+				typ = "String_3"
+			case descriptor.FieldDescriptorProto_TYPE_BYTES:
+				typ = "Bytes"
+			case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+				typ = "Message"
+			}
+			// Wrap value in struct that implements oneof interface.
+			// Store in field.
+			g.P("b = proto.Unpack", typ, "(b, unsafe.Pointer(&v.", fname, "), i)")
+			g.P("*(*", dname, ")(f) = &v")
+			g.P("return b")
+			g.Out()
+			g.P("},")
+			g.Out()
+			g.P("},")
+			continue
+		}
+
 		g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", fname, "),")
+
+		// Standard fields use a known fixed set of unpackers.
 		var suffix string
 		switch {
 		case field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED:
@@ -334,6 +396,9 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 			fn = "String"
 		case descriptor.FieldDescriptorProto_TYPE_BYTES:
 			fn = "Bytes"
+			if suffix != "_R" {
+				suffix = "" // Don't need to distinguish proto2 and proto3.
+			}
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 			fn = "Message"
 			if suffix != "_R" {
