@@ -187,11 +187,6 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 						valBase = strings.TrimPrefix(valType, "*")
 					}
 				}
-				g.P("if m.", fname, " == nil {")
-				g.In()
-				g.P("m.", fname, " = map[", keyBase, "]", valBase, "{}")
-				g.P("}")
-				g.Out()
 				keyStar := "*"
 				if keyType == keyBase {
 					keyStar = ""
@@ -200,6 +195,11 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 				if valType == valBase {
 					valStar = ""
 				}
+				g.P("if m.", fname, " == nil {")
+				g.In()
+				g.P("m.", fname, " = map[", keyBase, "]", valBase, "{}")
+				g.P("}")
+				g.Out()
 				g.P("m.", CamelCase(field.GetName()), "[", keyStar, "v.Key] = ", valStar, "v.Value")
 				g.Out()
 				continue
@@ -279,14 +279,6 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.P("Dense: []proto.UnpackFieldInfo {")
 	g.In()
 	for _, field := range message.Field {
-		if field.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
-			desc := g.ObjectNamed(field.GetTypeName())
-			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
-				// Treat map data as unrecognized
-				continue
-			}
-		}
-
 		g.P(int(field.GetNumber()), ": {")
 		g.In()
 		fname := CamelCase(field.GetName())
@@ -400,6 +392,59 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
 			}
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+			desc := g.ObjectNamed(field.GetTypeName())
+			if d, ok := desc.(*Descriptor); ok && d.GetOptions().GetMapEntry() {
+				// The message we just decoded corresponds to a map entry.
+				// Generate code to decode into the map entry.
+				keyField, valField := d.Field[0], d.Field[1]
+				keyType, _ := g.GoType(d, keyField)
+				valType, _ := g.GoType(d, valField)
+				var keyBase, valBase string
+				if message.proto3() {
+					keyBase = keyType
+					valBase = valType
+				} else {
+					keyBase = strings.TrimPrefix(keyType, "*")
+					switch *valField.Type {
+					case descriptor.FieldDescriptorProto_TYPE_ENUM:
+						valBase = strings.TrimPrefix(valType, "*")
+						g.RecordTypeUse(valField.GetTypeName())
+					case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+						valBase = valType
+						g.RecordTypeUse(valField.GetTypeName())
+					default:
+						valBase = strings.TrimPrefix(valType, "*")
+					}
+				}
+				keyStar := "*"
+				if keyType == keyBase {
+					keyStar = ""
+				}
+				valStar := "*"
+				if valType == valBase {
+					valStar = ""
+				}
+
+				g.P("Unpack: func(b []byte, f unsafe.Pointer, i *proto.UnpackMessageInfo) []byte {")
+				g.In()
+				g.P("var v ", ccTypeName, "_", fname, "Entry")
+				g.P("b = proto.UnpackMessage(b, unsafe.Pointer(&v), i)")
+				t := "map[" + keyBase + "]" + valBase
+				g.P("m := *(*", t, ")(f)")
+				g.P("if m == nil {")
+				g.In()
+				g.P("m = ", t, "{}")
+				g.P("*(*", t, ")(f) = m")
+				g.Out()
+				g.P("}")
+				g.P("m[", keyStar, "v.Key] = ", valStar, "v.Value")
+				g.P("return b")
+				g.Out()
+				g.P("},")
+				g.Out()
+				g.P("},")
+				continue
+			}
 			fn = "Message"
 			if suffix != "_R" {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
