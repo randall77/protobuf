@@ -36,6 +36,7 @@ Experiment for other techniques for unmarshaling a protobuf.
 package generator
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
@@ -268,6 +269,8 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 
 // table-driven decoder
 func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
+	var submessageLinks []string
+
 	typeName := message.TypeName()
 	ccTypeName := CamelCaseSlice(typeName)
 	g.P("var XXX_Unpack_", ccTypeName, " = proto.UnpackMessageInfo {")
@@ -450,13 +453,17 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 			if suffix != "_R" {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
 			}
-			g.P("Sub: &XXX_Unpack_", g.TypeName(g.ObjectNamed(field.GetTypeName())), ",")
+			// TODO: handle sparse here.
+			submessageLinks = append(submessageLinks,
+				fmt.Sprintf("XXX_Unpack_%s.Dense[%d].Sub = &XXX_Unpack_%s", ccTypeName, field.GetNumber(), g.TypeName(g.ObjectNamed(field.GetTypeName()))))
 		case descriptor.FieldDescriptorProto_TYPE_GROUP:
 			fn = "Group"
 			if suffix != "_R" {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
 			}
-			g.P("Sub: &XXX_Unpack_", g.TypeName(g.ObjectNamed(field.GetTypeName())), ",")
+			// TODO: handle sparse here.
+			submessageLinks = append(submessageLinks,
+				fmt.Sprintf("XXX_Unpack_%s.Dense[%d].Sub = &XXX_Unpack_%s", ccTypeName, field.GetNumber(), g.TypeName(g.ObjectNamed(field.GetTypeName()))))
 		default:
 			panic("unknown type for field: " + field.GetName())
 		}
@@ -476,6 +483,20 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	}
 	g.Out()
 	g.P("}")
+
+	// Link up submessage fields.
+	// We can't do that directly in the initializer because it generates
+	// cycles in the initialization graph.  See https://github.com/golang/go/issues/17533
+	// TODO: only use init for actual cycles?  init prevents pruning of unused message descriptors.
+	if submessageLinks != nil {
+		g.P("func init() {")
+		g.In()
+		for _, s := range submessageLinks {
+			g.P(s)
+		}
+		g.Out()
+		g.P("}")
+	}
 
 	// Eventually we would just call this function Unmarshal.
 	// Or we could register the proto name -> unpack info mapping, and get
