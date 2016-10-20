@@ -1685,7 +1685,7 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 		}
 		return b[m+uint64(k):]
 	case WireStartGroup:
-		i, j := FindEndGroup(b)
+		_, j := FindEndGroup(b)
 		if j < 0 {
 			return errorData[:]
 		}
