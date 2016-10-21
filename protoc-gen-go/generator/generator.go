@@ -778,11 +778,11 @@ func (g *Generator) SetPackageNames() {
 	// Register the support package names. They might collide with the
 	// name of a package we import.
 	g.Pkg = map[string]string{
-		"fmt":    RegisterUniquePackageName("fmt", nil),
-		"math":   RegisterUniquePackageName("math", nil),
-		"proto":  RegisterUniquePackageName("proto", nil),
-		"unsafe": RegisterUniquePackageName("unsafe", nil),
-		"atomic": RegisterUniquePackageName("atomic", nil),
+		"fmt":     RegisterUniquePackageName("fmt", nil),
+		"math":    RegisterUniquePackageName("math", nil),
+		"proto":   RegisterUniquePackageName("proto", nil),
+		"unsafe":  RegisterUniquePackageName("unsafe", nil),
+		"reflect": RegisterUniquePackageName("reflect", nil),
 	}
 
 AllFiles:
@@ -1329,7 +1329,7 @@ func (g *Generator) generateImports() {
 	g.P("import " + g.Pkg["fmt"] + ` "fmt"`)
 	g.P("import " + g.Pkg["math"] + ` "math"`)
 	g.P("import " + g.Pkg["unsafe"] + ` "unsafe"`)
-	g.P("import " + g.Pkg["atomic"] + ` "sync/atomic"`)
+	g.P("import " + g.Pkg["reflect"] + ` "reflect"`)
 	for i, s := range g.file.Dependency {
 		fd := g.fileByName(s)
 		// Do not import our own package.
@@ -1368,7 +1368,7 @@ func (g *Generator) generateImports() {
 	g.P("var _ = ", g.Pkg["fmt"], ".Errorf")
 	g.P("var _ = ", g.Pkg["math"], ".Inf")
 	g.P("var _ = ", g.Pkg["unsafe"], ".Pointer(nil)")
-	g.P("var _ = ", g.Pkg["atomic"], ".StoreInt32")
+	g.P("var _ = ", g.Pkg["reflect"], ".Copy")
 	g.P()
 }
 
