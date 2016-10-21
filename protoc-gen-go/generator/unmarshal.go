@@ -506,4 +506,17 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.P("return proto.UnmarshalMsg(b, unsafe.Pointer(m), &XXX_Unpack_", ccTypeName, ")")
 	g.Out()
 	g.P("}")
+
+	// build tables using reflect?
+	g.P("func (m *", ccTypeName, ") MergeReflectTable(b []byte) error {")
+	g.In()
+	g.P("if atomic.LoadInt32(&xxx_UnmarshalMessageInfo_", ccTypeName, ".Initialized) == 0 {")
+	g.In()
+	g.P("proto.InitUnmarshalMessageInfo(&xxx_UnmarshalMessageInfo_", ccTypeName, ", m)")
+	g.Out()
+	g.P("}")
+	g.P("return proto.UnmarshalMessage(unsafe.Pointer(m), b, &xxx_UnmarshalMessageInfo_", ccTypeName, ")")
+	g.Out()
+	g.P("}")
+	g.P("var xxx_UnmarshalMessageInfo_", ccTypeName, " proto.UnmarshalMessageInfo")
 }
