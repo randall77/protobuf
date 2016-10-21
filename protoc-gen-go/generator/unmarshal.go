@@ -267,17 +267,34 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 	g.P("}")
 }
 
+func hack(typ string) (string, string) {
+	// ccTypeName can be qualified with a package name. The
+	// package name ends up in the middle of the name. This
+	// hack extracts the package name and moves it to the
+	// front.
+	//
+	// Before:
+	//   XXX_Unpack_ocr_photo.AlignedFeaturesSettings
+	// After
+	//   ocr_photo.XXX_Unpack_AlignedFeaturesSettings
+	parts := strings.SplitN(typ, ".", 2)
+	if len(parts) == 2 {
+		return strings.TrimPrefix(parts[0], "XXX_Unpack_") + ".", parts[1]
+	}
+	return "", typ
+}
+
 // table-driven decoder
 func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	var submessageLinks []string
 
 	typeName := message.TypeName()
-	ccTypeName := CamelCaseSlice(typeName)
-	g.P("var XXX_Unpack_", ccTypeName, " = proto.UnpackMessageInfo {")
+	ccTypePkg, ccTypeName := hack(CamelCaseSlice(typeName))
+	g.P("var ", ccTypePkg, "XXX_Unpack_", ccTypeName, " = proto.UnpackMessageInfo {")
 	g.In()
 	g.P("Make: func() unsafe.Pointer {")
 	g.In()
-	g.P("return unsafe.Pointer(new(", ccTypeName, "))")
+	g.P("return unsafe.Pointer(new(", ccTypePkg+ccTypeName, "))")
 	g.Out()
 	g.P("},")
 	g.P("Dense: []proto.UnpackFieldInfo {")
@@ -289,13 +306,13 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 
 		if field.OneofIndex != nil {
 			odp := message.OneofDecl[int(*field.OneofIndex)]
-			dname := "is" + ccTypeName + "_" + CamelCase(odp.GetName())
+			dname := "is" + ccTypePkg + ccTypeName + "_" + CamelCase(odp.GetName())
 
-			g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", CamelCase(odp.GetName()), "),")
+			g.P("Offset: unsafe.Offsetof(", ccTypePkg+ccTypeName, "{}.", CamelCase(odp.GetName()), "),")
 			// Use generated code for the unpacker for oneofs.
 			g.P("Unpack: func(b []byte, f unsafe.Pointer, i *proto.UnpackMessageInfo) []byte {")
 			g.In()
-			g.P("var v ", ccTypeName, "_", fname)
+			g.P("var v ", ccTypePkg+ccTypeName, "_", fname)
 			var typ string
 
 			switch field.GetType() {
@@ -346,7 +363,7 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 			continue
 		}
 
-		g.P("Offset: unsafe.Offsetof(", ccTypeName, "{}.", fname, "),")
+		g.P("Offset: unsafe.Offsetof(", ccTypePkg+ccTypeName, "{}.", fname, "),")
 
 		// Standard fields use a known fixed set of unpackers.
 		var suffix string
@@ -361,9 +378,9 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 		var fn string
 		switch field.GetType() {
 		case descriptor.FieldDescriptorProto_TYPE_DOUBLE:
-			fn = "Double"
+			fn = "Float64"
 		case descriptor.FieldDescriptorProto_TYPE_FLOAT:
-			fn = "Float"
+			fn = "Float32"
 		case descriptor.FieldDescriptorProto_TYPE_INT64:
 			fn = "Int64"
 		case descriptor.FieldDescriptorProto_TYPE_UINT64:
@@ -431,7 +448,7 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 
 				g.P("Unpack: func(b []byte, f unsafe.Pointer, i *proto.UnpackMessageInfo) []byte {")
 				g.In()
-				g.P("var v ", ccTypeName, "_", fname, "Entry")
+				g.P("var v ", ccTypePkg+ccTypeName, "_", fname, "Entry")
 				g.P("b = proto.UnpackMessage(b, unsafe.Pointer(&v), i)")
 				t := "map[" + keyBase + "]" + valBase
 				g.P("m := *(*", t, ")(f)")
@@ -454,16 +471,18 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
 			}
 			// TODO: handle sparse here.
+			pkg, typ := hack(g.TypeName(g.ObjectNamed(field.GetTypeName())))
 			submessageLinks = append(submessageLinks,
-				fmt.Sprintf("XXX_Unpack_%s.Dense[%d].Sub = &XXX_Unpack_%s", ccTypeName, field.GetNumber(), g.TypeName(g.ObjectNamed(field.GetTypeName()))))
+				fmt.Sprintf("%sXXX_Unpack_%s.Dense[%d].Sub = &%sXXX_Unpack_%s", ccTypePkg, ccTypeName, field.GetNumber(), pkg, typ))
 		case descriptor.FieldDescriptorProto_TYPE_GROUP:
 			fn = "Group"
 			if suffix != "_R" {
 				suffix = "" // Don't need to distinguish proto2 and proto3.
 			}
 			// TODO: handle sparse here.
+			pkg, typ := hack(g.TypeName(g.ObjectNamed(field.GetTypeName())))
 			submessageLinks = append(submessageLinks,
-				fmt.Sprintf("XXX_Unpack_%s.Dense[%d].Sub = &XXX_Unpack_%s", ccTypeName, field.GetNumber(), g.TypeName(g.ObjectNamed(field.GetTypeName()))))
+				fmt.Sprintf("%sXXX_Unpack_%s.Dense[%d].Sub = &%sXXX_Unpack_%s", ccTypePkg, ccTypeName, field.GetNumber(), pkg, typ))
 		default:
 			panic("unknown type for field: " + field.GetName())
 		}
@@ -479,7 +498,7 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	if message.proto3() {
 		g.P("UnrecognizedOffset: 1,") // proto3 sentinel
 	} else {
-		g.P("UnrecognizedOffset: unsafe.Offsetof(", ccTypeName, "{}.XXX_unrecognized),")
+		g.P("UnrecognizedOffset: unsafe.Offsetof(", ccTypePkg+ccTypeName, "{}.XXX_unrecognized),")
 	}
 	g.Out()
 	g.P("}")
@@ -501,17 +520,17 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	// Eventually we would just call this function Unmarshal.
 	// Or we could register the proto name -> unpack info mapping, and get
 	// rid of this function entirely.
-	g.P("func (m *", ccTypeName, ") MergeTableDriven(b []byte) error {")
+	g.P("func (m *", ccTypePkg+ccTypeName, ") MergeTableDriven(b []byte) error {")
 	g.In()
-	g.P("return proto.UnmarshalMsg(b, unsafe.Pointer(m), &XXX_Unpack_", ccTypeName, ")")
+	g.P("return proto.UnmarshalMsg(b, unsafe.Pointer(m), &", ccTypePkg, "XXX_Unpack_", ccTypeName, ")")
 	g.Out()
 	g.P("}")
 
 	// build tables using reflect?
-	g.P("func (m *", ccTypeName, ") MergeReflectTable(b []byte) error {")
+	g.P("func (m *", ccTypePkg+ccTypeName, ") MergeReflectTable(b []byte) error {")
 	g.In()
-	g.P("return xxx_UnmarshalInfo_", ccTypeName, ".Unmarshal(unsafe.Pointer(m), m, b)")
+	g.P("return ", ccTypePkg, "xxx_UnmarshalInfo_", ccTypeName, ".Unmarshal(unsafe.Pointer(m), m, b)")
 	g.Out()
 	g.P("}")
-	g.P("var xxx_UnmarshalInfo_", ccTypeName, " proto.UnmarshalInfo")
+	g.P("var ", ccTypePkg, "xxx_UnmarshalInfo_", ccTypeName, " proto.UnmarshalInfo")
 }

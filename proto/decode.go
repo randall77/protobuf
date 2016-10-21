@@ -1015,7 +1015,7 @@ type UnpackFieldInfo struct {
 var errorData = [...]byte{128}
 var ErrorData = [...]byte{128}
 
-func UnpackDouble_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackFloat64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -1025,7 +1025,7 @@ func UnpackDouble_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[8:]
 }
 
-func UnpackDouble_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackFloat64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -1035,7 +1035,7 @@ func UnpackDouble_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[8:]
 }
 
-func UnpackDouble_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackFloat64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -1045,7 +1045,7 @@ func UnpackDouble_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[8:]
 }
 
-func UnpackFloat_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackFloat32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -1055,7 +1055,7 @@ func UnpackFloat_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[4:]
 }
 
-func UnpackFloat_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackFloat32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -1065,7 +1065,7 @@ func UnpackFloat_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	return b[4:]
 }
 
-func UnpackFloat_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
+func UnpackFloat32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
