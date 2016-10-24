@@ -1705,44 +1705,58 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 }
 
 type UnmarshalInfo struct {
-	// 0 = not initialized at all
-	// 1 = typ field is initialized
-	// 2 = completely initialized
+	typ reflect.Type // type of the struct
+
+	// 0 = only typ field is initialized
+	// 1 = completely initialized
 	initialized  int32
-	lock         sync.Mutex                    // lock required to change anything or look at anything except initialized
-	typ          reflect.Type                  // type of the struct to allocate for one of these
+	lock         sync.Mutex                    // prevents double initialization
 	dense        []unmarshalFieldInfo          // fields indexed by tag #
 	sparse       map[uint64]unmarshalFieldInfo // fields indexed by tag #
 	unrecognized uintptr                       // offset of []byte to put unrecognized data (or 1 if we should throw it away)
 }
 
+// An unmarshaler takes a stream of bytes, a pointer to a field of a message,
+// and some extra information (depending on the field type).  It decodes the
+// field and stores it at f and returns the unused bytes.
+// b is the data after the tag+wiretype have been read
+type unmarshaler func(b []byte, f unsafe.Pointer, extra interface{}) []byte
+
 type unmarshalFieldInfo struct {
 	// offset of the field in the proto message structure.
 	offset uintptr
 
-	// function which knows how to unmarshal the field.
-	// b: data (after tag+wire type have been read)
-	// f: pointer to field
-	// sub: information about the submessage/group (if any)
-	// returns unused data
-	unmarshal func(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte
+	// function to unmarshal the data for the field.
+	unmarshal unmarshaler
 
-	// For message&group types, type of the submessage/group. Nil otherwise.
-	sub *UnmarshalInfo
+	// Extra information if needed.
+	// For message & group types, an *UnmarshalInfo for the submessage/group.
+	// For maps, an *unmarshalMapInfo.
+	// For oneofs, an *unmarshalOneofInfo.
+	extra interface{}
 }
 
 // Unmarshal is the entry point from the generated .pb.go files.
-// u points to a cache of decoding information for the message.
-// m is a pointer to a protocol buffer message.
-// t contains the type information for m.
-// b is the data to be unmarshaled into m.
-func (u *UnmarshalInfo) Unmarshal(m unsafe.Pointer, t interface{}, b []byte) error {
-	if atomic.LoadInt32(&u.initialized) == 0 {
-		u.setType(t)
+// msg contains a pointer to a protocol buffer.
+// b is the data to be unmarshaled into the protocol buffer.
+// a is a pointer to a place to store cached unmarshal information.
+func UnmarshalReflect(msg interface{}, b []byte, a **UnmarshalInfo) error {
+	// u := *a, but atomically.
+	// We use an atomic here to ensure memory consistency.
+	u := (*UnmarshalInfo)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(a))))
+	if u == nil {
+		// Get unmarshal information from type of message.
+		u = getUnmarshalInfo(reflect.ValueOf(msg).Type().Elem())
+		// Store it in the cache for later users.
+		// *a = u, but atomically.
+		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(a)), unsafe.Pointer(u))
 	}
+
+	// Super-tricky - read pointer out of data word of interface value.
+	// Equivalent to m := unsafe.Pointer(reflect.ValueOf(msg).Pointer())
+	m := (*[2]unsafe.Pointer)(unsafe.Pointer(&msg))[1]
+
 	return u.unmarshal(m, b)
-	// TODO: have unmarshal return a []byte and construct
-	// a real error message here?
 }
 
 // unmarshal does the main work of unmarshaling a message.
@@ -1750,14 +1764,25 @@ func (u *UnmarshalInfo) Unmarshal(m unsafe.Pointer, t interface{}, b []byte) err
 // m is a pointer to a protocol buffer message.
 // b is a byte stream to unmarshal into m.
 func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
-	if atomic.LoadInt32(&u.initialized) < 2 {
-		computeUnmarshalInfo(u)
+	if atomic.LoadInt32(&u.initialized) == 0 {
+		u.computeUnmarshalInfo()
 	}
 	for len(b) > 0 {
 		// Read tag and wire type.
-		x, n := DecodeVarint(b)
-		if n == 0 {
-			return io.ErrUnexpectedEOF
+		// Special case 1 and 2 byte varints.
+		var x uint64
+		var n int
+		if b[0] < 128 {
+			x = uint64(b[0])
+			n = 1
+		} else if len(b) >= 2 && b[1] < 128 {
+			x = uint64(b[0]&0x7f) + uint64(b[1])<<7
+			n = 2
+		} else {
+			x, n = DecodeVarint(b)
+			if n == 0 {
+				return io.ErrUnexpectedEOF
+			}
 		}
 		tag := x >> 3
 
@@ -1769,7 +1794,7 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 			f = u.sparse[tag]
 		}
 		if fn := f.unmarshal; fn != nil {
-			b = fn(b[n:], unsafe.Pointer(uintptr(m)+f.offset), f.sub)
+			b = fn(b[n:], unsafe.Pointer(uintptr(m)+f.offset), f.extra)
 			continue
 		}
 
@@ -1829,44 +1854,242 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 	return nil
 }
 
-// setType records the type that the given UnmarshalInfo is to be used for.
-// m must contain a pointer to a protocol buffer object of the corresponding type.
-// (The pointer is irrelevant; we just need the type info from the interface{}.)
-func (u *UnmarshalInfo) setType(m interface{}) {
-	u.lock.Lock()
-	if u.initialized == 0 {
-		u.typ = reflect.TypeOf(m).Elem()
-		atomic.StoreInt32(&u.initialized, 1)
-	}
-	u.lock.Unlock()
-}
-
-// getSubMessageInfo returns the data structure which can be
+// getUnmarshalInfo returns the data structure which can be
 // subsequently used to unmarshal a message of the given type.
+// t is the type of the message (note: not pointer to message).
 func getUnmarshalInfo(t reflect.Type) *UnmarshalInfo {
 	// It would be correct to return a new UnmarshalInfo
 	// unconditionally. We would end up allocating one
-	// per occurrence of that type as a submessage.
+	// per occurrence of that type as a message or submessage.
 	// We use a cache here just to reduce memory usage.
 	messageLock.Lock()
 	defer messageLock.Unlock()
 	u := messageInfo[t]
 	if u == nil {
-		u = &UnmarshalInfo{}
+		u = &UnmarshalInfo{typ: t}
+		// Note: we just set the type here. The rest of the fields
+		// will be initialized on first use.
 		messageInfo[t] = u
-		u.typ = t
-		u.initialized = 1
 	}
-	// Note that this return value may duplicate the
-	// structure used by the top-level unmarshal code.  That's ok.
-	// There will be at most 2 copies, and in a given program
-	// messages don't often appear both as a top-level message
-	// and as a submessage.
 	return u
 }
 
 var messageLock sync.Mutex
 var messageInfo = map[reflect.Type]*UnmarshalInfo{}
+
+// computeUnmarshalInfo fills in u with information for use
+// in unmarshaling protocol buffers of type u.typ.
+func (u *UnmarshalInfo) computeUnmarshalInfo() {
+	u.lock.Lock()
+	defer u.lock.Unlock()
+	if u.initialized != 0 {
+		return
+	}
+	t := u.typ
+
+	// Set up the "not found" value for the unrecognized byte buffer.
+	// This is the default for proto3.
+	u.unrecognized = 1
+
+	// List of the generated type and offset for each oneof field.
+	type oneofField struct {
+		ityp   reflect.Type // interface type of oneof field
+		offset uintptr      // offset in containing message
+	}
+	var oneofFields []oneofField
+
+	n := t.NumField()
+	for i := 0; i < n; i++ {
+		f := t.Field(i)
+		if f.Name == "XXX_unrecognized" {
+			// The byte slice used to hold unrecognized input is special.
+			u.unrecognized = f.Offset
+			continue
+		}
+		oneof := f.Tag.Get("protobuf_oneof")
+		if oneof != "" {
+			oneofFields = append(oneofFields, oneofField{f.Type, f.Offset})
+			// The rest of oneof processing happens below.
+			continue
+		}
+
+		// Extract unmarshaling information from the field (its type and tags).
+		unmarshal, extra := fieldUnmarshaler(&f)
+
+		// Store the info in the correct slot in the message.
+		tag, err := strconv.Atoi(strings.Split(f.Tag.Get("protobuf"), ",")[1])
+		if err != nil {
+			panic("protobuf tag field not an integer")
+		}
+		u.setTag(tag, n, f.Offset, unmarshal, extra)
+	}
+
+	// Find any types associated with oneof fields.
+	// TODO: XXX_OneofFuncs returns more info than we need.  Get rid of some of it?
+	fn := reflect.Zero(reflect.PtrTo(t)).MethodByName("XXX_OneofFuncs")
+	if fn.IsValid() {
+		res := fn.Call(nil)[3] // last return value from XXX_OneofFuncs: []interface{}
+		for i := res.Len() - 1; i >= 0; i-- {
+			v := res.Index(i)                             // interface{}
+			tptr := reflect.ValueOf(v.Interface()).Type() // *Msg_X
+			typ := tptr.Elem()                            // Msg_X
+
+			f := typ.Field(0) // oneof implementers have one field
+			unmarshal, extra := fieldUnmarshaler(&f)
+			tag, err := strconv.Atoi(strings.Split(f.Tag.Get("protobuf"), ",")[1])
+			if err != nil {
+				panic("protobuf tag field not an integer")
+			}
+
+			// Find the oneof field that this struct implements.
+			// This pass is O(n^2), but who cares.
+			for _, of := range oneofFields {
+				if tptr.Implements(of.ityp) {
+					// We have found the corresponding interface for this struct.
+					// That lets us know where this struct should be stored
+					// when we encounter it during unmarshaling.
+					info := &unmarshalOneofInfo{
+						typ:       typ,
+						ityp:      of.ityp,
+						unmarshal: unmarshal,
+						extra:     extra,
+					}
+					u.setTag(tag, n, of.offset, unmarshalOneof, info)
+				}
+			}
+		}
+	}
+
+	atomic.StoreInt32(&u.initialized, 1)
+}
+
+// setTag stores the unmarshal information for the given tag.
+// tag = tag # for field
+// n = number of fields
+// offset/unmarshal/extra = unmarshal info for that field.
+func (u *UnmarshalInfo) setTag(tag int, n int, offset uintptr, unmarshal unmarshaler, extra interface{}) {
+	i := unmarshalFieldInfo{offset: offset, unmarshal: unmarshal, extra: extra}
+	if tag >= 0 && (tag < 16 || tag < 2*n) { // TODO: what are the right numbers here?
+		for len(u.dense) <= tag {
+			u.dense = append(u.dense, unmarshalFieldInfo{})
+		}
+		u.dense[tag] = i
+	} else {
+		u.sparse[uint64(tag)] = i
+	}
+
+}
+
+// fieldUnmarshaler returns an unmarshaler for the given field.
+// Also returns any extra data needed for decoding.
+func fieldUnmarshaler(f *reflect.StructField) (unmarshaler, interface{}) {
+	tagstr := f.Tag.Get("protobuf")
+	if tagstr == "" {
+		panic("missing protobuf tag in protobuf")
+	}
+	entries := strings.Split(tagstr, ",")
+
+	// Figure out the right unmarshaling function.
+	if f.Type.Kind() == reflect.Map {
+		keystr := f.Tag.Get("protobuf_key")
+		valstr := f.Tag.Get("protobuf_val")
+		keyEntries := strings.Split(keystr, ",")
+		valEntries := strings.Split(valstr, ",")
+		x := &unmarshalMapInfo{typ: f.Type}
+		x.unmarshalKey, x.extraKey = typeUnmarshaler(f.Type.Key(), keyEntries[0])
+		x.unmarshalVal, x.extraVal = typeUnmarshaler(f.Type.Elem(), valEntries[0])
+		return unmarshalMap, x
+	} else {
+		return typeUnmarshaler(f.Type, entries[0])
+	}
+
+}
+
+// typeUnmarshaler returns an unmarshaler for the given field type and the encoding kind from the field tag.
+// Also returns any extra data needed for decoding.
+func typeUnmarshaler(t reflect.Type, encoding string) (unmarshaler, interface{}) {
+	// Figure out packaging (pointer, slice, or both)
+	slice := 0
+	pointer := 0
+	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 {
+		slice = 1
+		t = t.Elem()
+	}
+	if t.Kind() == reflect.Ptr {
+		pointer = 1
+		t = t.Elem()
+	}
+	// Note: slice == pointer == 1 means []*T, not *[]T (the latter never happens).
+
+	var k kind
+	var extra interface{}
+	switch t.Kind() {
+	case reflect.Bool:
+		k = kindBool
+	case reflect.Int32:
+		switch encoding {
+		case "varint":
+			k = kindInt32 // this could be int32 or enum
+		case "zigzag32":
+			k = kindSint32
+		default:
+			panic("bad reflect tag")
+		}
+	case reflect.Int64:
+		switch encoding {
+		case "varint":
+			k = kindInt64
+		case "zigzag64":
+			k = kindSint64
+		default:
+			panic("bad reflect tag")
+		}
+	case reflect.Uint32:
+		switch encoding {
+		case "fixed32":
+			k = kindFixed32
+		case "varint":
+			k = kindUint32
+		default:
+			panic("bad reflect tag")
+		}
+	case reflect.Uint64:
+		switch encoding {
+		case "fixed64":
+			k = kindFixed64
+		case "varint":
+			k = kindUint64
+		default:
+			panic("bad reflect tag")
+		}
+	case reflect.Float32:
+		k = kindFloat
+	case reflect.Float64:
+		k = kindDouble
+	case reflect.Map:
+		panic("map type in typeUnmarshaler")
+		// This case needs to be handled by the caller because we need
+		// the protobuf_key and protobuf_val tags.
+	case reflect.Slice:
+		k = kindBytes
+	case reflect.String:
+		k = kindString
+	case reflect.Struct:
+		// message or group field
+		switch encoding {
+		case "bytes":
+			k = kindMessage
+		case "group":
+			k = kindGroup
+		default:
+			panic("bad reflect tag")
+		}
+		extra = getUnmarshalInfo(t)
+	default:
+		panic("bad kind")
+	}
+	return tab[pointer][slice][k], extra
+}
 
 // Kinds correspond to the raw types mentioned in the proto file.
 // We reverse engineer them from the reflect types + protobuf tag information.
@@ -1900,14 +2123,14 @@ const (
 // in a slice (by slice), or by pointer in a slice.
 // So a proto2 optional int32 field would have kind=kindInt32, pointer=1, and slice=0.
 // Indexed by [isAPointer][isASlice][kind].
-var tab [2][2][numKinds]func(b []byte, f unsafe.Pointer, i *UnmarshalInfo) []byte
+var tab [2][2][numKinds]unmarshaler
 
 // crazy dance to avoid circular initialization problems.
 func init() {
 	tab = tabinit
 }
 
-var tabinit = [2][2][numKinds]func(b []byte, f unsafe.Pointer, i *UnmarshalInfo) []byte{
+var tabinit = [2][2][numKinds]unmarshaler{
 	0: {
 		0: { // T
 			kindDouble:   unmarshalFloat64Value,
@@ -1971,148 +2194,9 @@ var tabinit = [2][2][numKinds]func(b []byte, f unsafe.Pointer, i *UnmarshalInfo)
 	},
 }
 
-// computeUnmarshalInfo fills in u with information for use
-// in unmarshaling protocol buffers of type u.typ.
-func computeUnmarshalInfo(u *UnmarshalInfo) {
-	u.lock.Lock()
-	defer u.lock.Unlock()
-	if u.initialized == 2 {
-		return
-	}
-	if u.initialized == 0 {
-		panic("unknown type")
-	}
-	t := u.typ
-
-	// Set up the "not found" value for the unrecognized byte buffer.
-	// This is the default for proto3.
-	u.unrecognized = 1
-
-	n := t.NumField()
-	for i := 0; i < n; i++ {
-		f := t.Field(i)
-		if f.Name == "XXX_unrecognized" {
-			u.unrecognized = f.Offset
-			continue
-		}
-
-		oneof := f.Tag.Get("protobuf_oneof")
-		if oneof != "" {
-			// TODO
-			continue
-		}
-
-		tagstr := f.Tag.Get("protobuf")
-		if tagstr == "" {
-			panic("missing protobuf tag in protobuf")
-		}
-		entries := strings.Split(tagstr, ",")
-
-		// Figure out packaging (pointer, slice, or both)
-		slice := 0
-		pointer := 0
-		ft := f.Type
-		if ft.Kind() == reflect.Slice && ft.Elem().Kind() != reflect.Uint8 {
-			slice = 1
-			ft = ft.Elem()
-		}
-		if ft.Kind() == reflect.Ptr {
-			pointer = 1
-			ft = ft.Elem()
-		}
-		// Note: slice == pointer == 1 means []*T, not *[]T (the latter never happens).
-
-		// Figure out the base kind of the data.
-		var k kind
-		var sub *UnmarshalInfo
-		switch ft.Kind() {
-		case reflect.Bool:
-			k = kindBool
-		case reflect.Int32:
-			switch entries[0] {
-			case "varint":
-				k = kindInt32 // this could be int32 or enum
-			case "zigzag32":
-				k = kindSint32
-			default:
-				panic("bad reflect tag")
-			}
-		case reflect.Int64:
-			switch entries[0] {
-			case "varint":
-				k = kindInt64
-			case "zigzag64":
-				k = kindSint64
-			default:
-				panic("bad reflect tag")
-			}
-		case reflect.Uint32:
-			switch entries[0] {
-			case "fixed32":
-				k = kindFixed32
-			case "varint":
-				k = kindUint32
-			default:
-				panic("bad reflect tag")
-			}
-		case reflect.Uint64:
-			switch entries[0] {
-			case "fixed64":
-				k = kindFixed64
-			case "varint":
-				k = kindUint64
-			default:
-				panic("bad reflect tag")
-			}
-		case reflect.Float32:
-			k = kindFloat
-		case reflect.Float64:
-			k = kindDouble
-		case reflect.Map:
-			// TODO: implement maps
-		case reflect.Slice:
-			k = kindBytes
-		case reflect.String:
-			k = kindString
-		case reflect.Struct:
-			// message or group field
-			switch entries[0] {
-			case "bytes":
-				k = kindMessage
-			case "group":
-				k = kindGroup
-			default:
-				panic("bad reflect tag")
-			}
-			sub = getUnmarshalInfo(ft)
-		default:
-			panic("bad kind")
-		}
-
-		// Make the info for the field.
-		v := unmarshalFieldInfo{offset: f.Offset, unmarshal: tab[pointer][slice][k], sub: sub}
-
-		// Store the field in the correct slot in the message.
-		tag, err := strconv.Atoi(entries[1])
-		if err != nil {
-			panic("protobuf tag field not an integer")
-		}
-		if tag >= 0 && (tag < 16 || tag < 2*n) { // TODO: what are the right numbers here?
-			for len(u.dense) <= tag {
-				u.dense = append(u.dense, unmarshalFieldInfo{})
-			}
-			u.dense[tag] = v
-		} else {
-			u.sparse[uint64(tag)] = v
-		}
-	}
-
-	atomic.StoreInt32(&u.initialized, 2)
-}
-
 // Below are all the unmarshalers for individual fields of various types.
 
-func unmarshalFloat64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFloat64Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2122,7 +2206,7 @@ func unmarshalFloat64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[8:]
 }
 
-func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2132,7 +2216,7 @@ func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[8:]
 }
 
-func unmarshalFloat64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFloat64Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2142,7 +2226,7 @@ func unmarshalFloat64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[8:]
 }
 
-func unmarshalFloat32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFloat32Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2152,7 +2236,7 @@ func unmarshalFloat32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[4:]
 }
 
-func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2162,7 +2246,7 @@ func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[4:]
 }
 
-func unmarshalFloat32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFloat32Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2172,7 +2256,7 @@ func unmarshalFloat32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[4:]
 }
 
-func unmarshalInt64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalInt64Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2184,7 +2268,7 @@ func unmarshalInt64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalInt64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalInt64Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2196,7 +2280,7 @@ func unmarshalInt64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalInt64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalInt64Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2208,7 +2292,7 @@ func unmarshalInt64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalSint64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalSint64Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2220,7 +2304,7 @@ func unmarshalSint64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalSint64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalSint64Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2232,7 +2316,7 @@ func unmarshalSint64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalSint64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalSint64Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2244,7 +2328,7 @@ func unmarshalSint64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalInt32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalInt32Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2256,7 +2340,7 @@ func unmarshalInt32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalInt32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalInt32Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2268,7 +2352,7 @@ func unmarshalInt32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalInt32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalInt32Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2280,7 +2364,7 @@ func unmarshalInt32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalSint32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalSint32Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2292,7 +2376,7 @@ func unmarshalSint32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalSint32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalSint32Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2304,7 +2388,7 @@ func unmarshalSint32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalSint32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalSint32Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2316,7 +2400,7 @@ func unmarshalSint32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalEnumValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalEnumValue(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2328,7 +2412,7 @@ func unmarshalEnumValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalEnumPtr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalEnumPtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2341,7 +2425,7 @@ func unmarshalEnumPtr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalEnumSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalEnumSlice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2353,7 +2437,7 @@ func unmarshalEnumSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b
 }
 
-func unmarshalBoolValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalBoolValue(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 1 {
 		return errorData[:]
 	}
@@ -2366,7 +2450,7 @@ func unmarshalBoolValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[1:]
 }
 
-func unmarshalBoolPtr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalBoolPtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 1 {
 		return errorData[:]
 	}
@@ -2379,7 +2463,7 @@ func unmarshalBoolPtr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[1:]
 }
 
-func unmarshalBoolSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalBoolSlice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 1 {
 		return errorData[:]
 	}
@@ -2392,7 +2476,7 @@ func unmarshalBoolSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[1:]
 }
 
-func unmarshalFixed64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFixed64Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2402,7 +2486,7 @@ func unmarshalFixed64Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[8:]
 }
 
-func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2412,7 +2496,7 @@ func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[8:]
 }
 
-func unmarshalFixed64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFixed64Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2422,7 +2506,7 @@ func unmarshalFixed64Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[8:]
 }
 
-func unmarshalFixed32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFixed32Value(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2432,7 +2516,7 @@ func unmarshalFixed32Value(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[4:]
 }
 
-func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2442,7 +2526,7 @@ func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[4:]
 }
 
-func unmarshalFixed32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalFixed32Slice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2452,7 +2536,7 @@ func unmarshalFixed32Slice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte 
 	return b[4:]
 }
 
-func unmarshalStringValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalStringValue(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2467,7 +2551,7 @@ func unmarshalStringValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[x:]
 }
 
-func unmarshalStringPtr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalStringPtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2482,7 +2566,7 @@ func unmarshalStringPtr(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[x:]
 }
 
-func unmarshalStringSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalStringSlice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2497,7 +2581,7 @@ func unmarshalStringSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[x:]
 }
 
-func unmarshalBytesValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalBytesValue(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2513,7 +2597,7 @@ func unmarshalBytesValue(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[x:]
 }
 
-func unmarshalBytesSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
+func unmarshalBytesSlice(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2529,7 +2613,7 @@ func unmarshalBytesSlice(b []byte, f unsafe.Pointer, _ *UnmarshalInfo) []byte {
 	return b[x:]
 }
 
-func unmarshalMessagePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte {
+func unmarshalMessagePtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2538,8 +2622,8 @@ func unmarshalMessagePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte 
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
+	sub := extra.(*UnmarshalInfo)
 	v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
-	// TODO: reflect allocation can be slow. Have a dedicated allocation function per type?
 	err := sub.unmarshal(v, b[:x])
 	if err != nil {
 		return errorData[:]
@@ -2549,7 +2633,7 @@ func unmarshalMessagePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte 
 	return b[x:]
 }
 
-func unmarshalMessageSlicePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte {
+func unmarshalMessageSlicePtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2558,6 +2642,7 @@ func unmarshalMessageSlicePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []
 	if x > uint64(len(b)) {
 		return errorData[:]
 	}
+	sub := extra.(*UnmarshalInfo)
 	v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
 	err := sub.unmarshal(v, b[:x])
 	if err != nil {
@@ -2568,11 +2653,12 @@ func unmarshalMessageSlicePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []
 	return b[x:]
 }
 
-func unmarshalGroupPtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte {
+func unmarshalGroupPtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, y := FindEndGroup(b)
 	if x < 0 {
 		return errorData[:]
 	}
+	sub := extra.(*UnmarshalInfo)
 	v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
 	err := sub.unmarshal(v, b[:x])
 	if err != nil {
@@ -2583,11 +2669,12 @@ func unmarshalGroupPtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte {
 	return b[y:]
 }
 
-func unmarshalGroupSlicePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []byte {
+func unmarshalGroupSlicePtr(b []byte, f unsafe.Pointer, extra interface{}) []byte {
 	x, y := FindEndGroup(b)
 	if x < 0 {
 		return errorData[:]
 	}
+	sub := extra.(*UnmarshalInfo)
 	v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
 	err := sub.unmarshal(v, b[:x])
 	if err != nil {
@@ -2596,4 +2683,88 @@ func unmarshalGroupSlicePtr(b []byte, f unsafe.Pointer, sub *UnmarshalInfo) []by
 	g := (*[]unsafe.Pointer)(f)
 	*g = append(*g, v)
 	return b[y:]
+}
+
+type unmarshalMapInfo struct {
+	typ          reflect.Type // type of the map
+	unmarshalKey unmarshaler
+	unmarshalVal unmarshaler
+	extraKey     interface{}
+	extraVal     interface{}
+}
+
+func unmarshalMap(b []byte, f unsafe.Pointer, extra interface{}) []byte {
+	i := extra.(*unmarshalMapInfo)
+
+	// The map entry is a submessage. Figure out how big it is.
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	b = b[n:]
+	if x > uint64(len(b)) {
+		return errorData[:]
+	}
+	r := b[x:] // unused data to return
+	b = b[:x]  // data for map entry
+
+	// Note: we could use #keys * #values ~= 200 functions
+	// to do map decoding without reflection. Probably not worth it.
+	// Maps will be somewhat slow. Oh well.
+	mt := i.typ
+	kt := mt.Key()
+	vt := mt.Elem()
+
+	// Read key and value from data.
+	k := reflect.New(kt)
+	v := reflect.New(vt)
+	for len(b) > 0 {
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		switch x >> 3 {
+		case 1:
+			b = i.unmarshalKey(b, unsafe.Pointer(k.Pointer()), nil)
+		case 2:
+			b = i.unmarshalVal(b, unsafe.Pointer(v.Pointer()), i.extraVal)
+		}
+	}
+
+	// Get map, allocate if needed.
+	m := reflect.NewAt(mt, f).Elem() // an addressable map[K]T
+	if m.IsNil() {
+		m.Set(reflect.MakeMap(mt))
+	}
+
+	// Insert into map.
+	m.SetMapIndex(k.Elem(), v.Elem())
+
+	return r
+}
+
+type unmarshalOneofInfo struct {
+	typ       reflect.Type // type of wrapper object (without the *)
+	ityp      reflect.Type // type of field (an interface type)
+	unmarshal unmarshaler  // unmarshaler for underlying type
+	extra     interface{}  // extra info for underlying type
+}
+
+func unmarshalOneof(b []byte, f unsafe.Pointer, extra interface{}) []byte {
+	i := extra.(*unmarshalOneofInfo)
+
+	// Allocate holder for value.
+	v := reflect.New(i.typ)
+
+	// Unmarshal data into holder.
+	// The holder only has one field, so the field location is
+	// the same as the holder itself.
+	b = i.unmarshal(b, unsafe.Pointer(v.Pointer()), i.extra)
+
+	// Write pointer to holder into target field.
+	// This is the write of a non-empty interface field, so it is a bit tricky.
+	reflect.NewAt(i.ityp, f).Elem().Set(v)
+
+	return b
 }

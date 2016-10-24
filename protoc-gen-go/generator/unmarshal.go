@@ -45,6 +45,7 @@ import (
 func (g *Generator) generateUnmarshalCode(message *Descriptor) {
 	g.generateUnmarshalFullCustom(message)
 	g.generateUnmarshalTableDriven(message)
+	g.generateUnmarshalReflectTable(message)
 }
 
 // Full custom decoder.
@@ -526,11 +527,15 @@ func (g *Generator) generateUnmarshalTableDriven(message *Descriptor) {
 	g.Out()
 	g.P("}")
 
-	// build tables using reflect?
+}
+func (g *Generator) generateUnmarshalReflectTable(message *Descriptor) {
+	typeName := message.TypeName()
+	ccTypePkg, ccTypeName := hack(CamelCaseSlice(typeName))
+
 	g.P("func (m *", ccTypePkg+ccTypeName, ") MergeReflectTable(b []byte) error {")
 	g.In()
-	g.P("return ", ccTypePkg, "xxx_UnmarshalInfo_", ccTypeName, ".Unmarshal(unsafe.Pointer(m), m, b)")
+	g.P("return proto.UnmarshalReflect(m, b, &", ccTypePkg, "xxx_unmarshalInfoPtr_", ccTypeName, ")")
 	g.Out()
 	g.P("}")
-	g.P("var ", ccTypePkg, "xxx_UnmarshalInfo_", ccTypeName, " proto.UnmarshalInfo")
+	g.P("var ", ccTypePkg, "xxx_unmarshalInfoPtr_", ccTypeName, " *proto.UnmarshalInfo")
 }
