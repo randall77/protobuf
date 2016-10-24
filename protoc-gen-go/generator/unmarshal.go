@@ -57,8 +57,36 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 	g.In()
 	g.P("for len(b) > 0 {")
 	g.In()
-	g.P("x,n := proto.DecodeVarint(b)")
-	g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+
+	if false {
+		g.P("x,n := proto.DecodeVarint(b)")
+		g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+	} else {
+		// Inline 1 and 2 byte decodes.
+		// TODO: if all tags < 16, don't bother with the 2 byte case.
+		g.P("var x uint64")
+		g.P("var n int")
+		g.P("if b[0] < 128 {")
+		g.In()
+		g.P("x = uint64(b[0])")
+		g.P("n = 1")
+		g.Out()
+		g.P("} else if len(b) >= 2 && b[1] < 128 {")
+		g.In()
+		g.P("x = uint64(b[0]&0x7f) + uint64(b[1])<<7")
+		g.P("n = 2")
+		g.Out()
+		g.P("} else {")
+		g.In()
+		g.P("x,n = proto.DecodeVarint(b)")
+		g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+		g.Out()
+		g.P("}")
+	}
+
+	// TODO: instead of doing DecodeVarint and switching on the result,
+	// switch directly on b[0], then b[1], ...
+
 	g.P("b = b[n:]")
 	g.P("switch x>>3 {")
 	g.In()
