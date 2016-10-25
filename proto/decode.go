@@ -1063,7 +1063,7 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 			return errorData[:]
 		}
 		if u != nil {
-			*u = append(*u, EncodeVarint(x)...)
+			*u = encodeVarint(*u, x)
 			*u = append(*u, b[:k]...)
 		}
 		return b[k:]
@@ -1072,7 +1072,7 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 			return errorData[:]
 		}
 		if u != nil {
-			*u = append(*u, EncodeVarint(x)...)
+			*u = encodeVarint(*u, x)
 			*u = append(*u, b[:4]...)
 		}
 		return b[4:]
@@ -1081,7 +1081,7 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 			return errorData[:]
 		}
 		if u != nil {
-			*u = append(*u, EncodeVarint(x)...)
+			*u = encodeVarint(*u, x)
 			*u = append(*u, b[:8]...)
 		}
 		return b[8:]
@@ -1090,11 +1090,11 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 		if k == 0 {
 			return errorData[:]
 		}
-		if m > uint64(len(b)) {
+		if m+uint64(k) > uint64(len(b)) {
 			return errorData[:]
 		}
 		if u != nil {
-			*u = append(*u, EncodeVarint(x)...)
+			*u = encodeVarint(*u, x)
 			*u = append(*u, b[:m+uint64(k)]...)
 		}
 		return b[m+uint64(k):]
@@ -1104,14 +1104,13 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 			return errorData[:]
 		}
 		if u != nil {
-			*u = append(*u, EncodeVarint(x)...)
+			*u = encodeVarint(*u, x)
 			*u = append(*u, b[:j]...)
 		}
 		return b[j:]
 	default:
 		return errorData[:]
 	}
-	// TODO: modify EncodeVarint to append to a slice?  That would avoid an unnecessary allocation.
 }
 
 // This slice of bytes is an invalid varint.
