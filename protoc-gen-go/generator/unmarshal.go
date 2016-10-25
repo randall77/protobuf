@@ -63,21 +63,22 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 		// Inline 1 and 2 byte decodes.
 		// TODO: if all tags < 16, don't bother with the 2 byte case.
 		g.P("var x uint64")
-		g.P("var n int")
 		g.P("if b[0] < 128 {")
 		g.In()
 		g.P("x = uint64(b[0])")
-		g.P("n = 1")
+		g.P("b = b[1:]")
 		g.Out()
 		g.P("} else if len(b) >= 2 && b[1] < 128 {")
 		g.In()
 		g.P("x = uint64(b[0]&0x7f) + uint64(b[1])<<7")
-		g.P("n = 2")
+		g.P("b = b[2:]")
 		g.Out()
 		g.P("} else {")
 		g.In()
+		g.P("var n int")
 		g.P("x,n = proto.DecodeVarint(b)")
 		g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+		g.P("b = b[n:]")
 		g.Out()
 		g.P("}")
 	}
@@ -85,7 +86,6 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 	// TODO: instead of doing DecodeVarint and switching on the result,
 	// switch directly on b[0], then b[1], ...
 
-	g.P("b = b[n:]")
 	g.P("switch x>>3 {")
 	g.In()
 	for _, field := range message.Field {
@@ -99,49 +99,110 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 		pointer := false
 		switch field.GetType() {
 		case descriptor.FieldDescriptorProto_TYPE_DOUBLE:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(8)
+				g.P("v := math.Float64frombits(uint64(c[0]) | uint64(c[1])<<8 | uint64(c[2])<<16 | uint64(c[3])<<24 | uint64(c[4])<<32 | uint64(c[5])<<40 | uint64(c[6])<<48 | uint64(c[7])<<56)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(8)
+			}
 			g.P("if len(b) < 8 { return proto.ErrInternalBadWireType }")
 			g.P("v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)")
 			g.P("b = b[8:]")
 		case descriptor.FieldDescriptorProto_TYPE_FLOAT:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(4)
+				g.P("v := math.Float32frombits(uint32(c[0]) | uint32(c[1])<<8 | uint32(c[2])<<16 | uint32(c[3])<<24)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(4)
+			}
 			g.P("if len(b) < 4 { return proto.ErrInternalBadWireType }")
 			g.P("v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)")
 			g.P("b = b[4:]")
 		case descriptor.FieldDescriptorProto_TYPE_INT64:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := int64(y)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := int64(x)")
 		case descriptor.FieldDescriptorProto_TYPE_UINT64:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := uint64(y)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := uint64(x)")
 		case descriptor.FieldDescriptorProto_TYPE_SINT64:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := int64(y>>1) ^ int64(y)<<63>>63")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := int64(x>>1) ^ int64(x)<<63>>63")
 		case descriptor.FieldDescriptorProto_TYPE_INT32:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := int32(y)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := int32(x)")
 		case descriptor.FieldDescriptorProto_TYPE_UINT32:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := uint32(y)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := uint32(x)")
 		case descriptor.FieldDescriptorProto_TYPE_SINT32:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := int32(y>>1) ^ int32(y)<<31>>31")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := int32(x>>1) ^ int32(x)<<31>>31")
 		case descriptor.FieldDescriptorProto_TYPE_ENUM:
-			g.P("x, n = proto.DecodeVarint(b)")
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(-1)
+				g.P("v := ", g.TypeName(g.ObjectNamed(field.GetTypeName())), "(y)")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(-1)
+			}
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("v := ", g.TypeName(g.ObjectNamed(field.GetTypeName())), "(x)")
 		case descriptor.FieldDescriptorProto_TYPE_BOOL:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(1)
+				g.P("v := false")
+				g.P("if c[0] != 0 { v = true }")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(1)
+			}
 			g.P("if len(b) == 0 { return proto.ErrInternalBadWireType }")
 			g.P("v := false")
 			g.P("if b[0] != 0 {")
@@ -151,30 +212,54 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("}")
 			g.P("b = b[1:]")
 		case descriptor.FieldDescriptorProto_TYPE_FIXED64:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(8)
+				g.P("v := uint64(c[0]) | uint64(c[1])<<8 | uint64(c[2])<<16 | uint64(c[3])<<24 | uint64(c[4])<<32 | uint64(c[5])<<40 | uint64(c[6])<<48 | uint64(c[7])<<56")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(8)
+			}
 			g.P("if len(b) < 8 { return proto.ErrInternalBadWireType }")
 			g.P("v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56")
 			g.P("b = b[8:]")
 		case descriptor.FieldDescriptorProto_TYPE_SFIXED64:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(8)
+				g.P("v := int64(c[0]) | int64(c[1])<<8 | int64(c[2])<<16 | int64(c[3])<<24 | int64(c[4])<<32 | int64(c[5])<<40 | int64(c[6])<<48 | int64(c[7])<<56")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(8)
+			}
 			g.P("if len(b) < 8 { return proto.ErrInternalBadWireType }")
 			g.P("v := int64(b[0]) | int64(b[1])<<8 | int64(b[2])<<16 | int64(b[3])<<24 | int64(b[4])<<32 | int64(b[5])<<40 | int64(b[6])<<48 | int64(b[7])<<56")
 			g.P("b = b[8:]")
 		case descriptor.FieldDescriptorProto_TYPE_FIXED32:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(4)
+				g.P("v := uint32(c[0]) | uint32(c[1])<<8 | uint32(c[2])<<16 | uint32(c[3])<<24")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(4)
+			}
 			g.P("if len(b) < 4 { return proto.ErrInternalBadWireType }")
 			g.P("v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24")
 			g.P("b = b[4:]")
 		case descriptor.FieldDescriptorProto_TYPE_SFIXED32:
+			if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
+				g.readPacked1(4)
+				g.P("v := int32(c[0]) | int32(c[1])<<8 | int32(c[2])<<16 | int32(c[3])<<24")
+				g.P("m.", fname, "= append(m.", fname, ", v)")
+				g.readPacked2(4)
+			}
 			g.P("if len(b) < 4 { return proto.ErrInternalBadWireType }")
 			g.P("v := int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24")
 			g.P("b = b[4:]")
 		case descriptor.FieldDescriptorProto_TYPE_STRING:
-			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
 			g.P("v := string(b[:x])")
 			g.P("b = b[x:]")
 		case descriptor.FieldDescriptorProto_TYPE_BYTES:
-			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
@@ -183,7 +268,7 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 			g.P("b = b[x:]")
 		case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 			desc := g.ObjectNamed(field.GetTypeName())
-			g.P("x, n = proto.DecodeVarint(b)")
+			g.P("x, n := proto.DecodeVarint(b)")
 			g.P("if n == 0 { return proto.ErrInternalBadWireType }")
 			g.P("b = b[n:]")
 			g.P("if uint64(len(b)) < x { return proto.ErrInternalBadWireType }")
@@ -291,6 +376,44 @@ func (g *Generator) generateUnmarshalFullCustom(message *Descriptor) {
 	g.P("}")
 	g.Out()
 	g.P("return nil")
+	g.P("}")
+}
+
+// readPacked1 and readPacked2 generate the wrappers used
+// to step through packed fields.
+// bytes = number of bytes per entry, -1 if variable length.
+func (g *Generator) readPacked1(bytes int) {
+	g.P("if x&7 == 2 {") // packed
+	g.In()
+	g.P("x, n := proto.DecodeVarint(b)")
+	g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+	g.P("b = b[n:]")
+	g.P("if x > uint64(len(b)) { return proto.ErrInternalBadWireType }")
+	g.P("c := b[:x]")
+	g.P("b = b[x:]")
+	if bytes < 0 {
+		g.P("for len(c) > 0 {")
+	} else {
+		g.P("for len(c) >= ", bytes, "{")
+	}
+	g.In()
+	if bytes < 0 {
+		g.P("y, n := proto.DecodeVarint(c)")
+		g.P("if n == 0 { return proto.ErrInternalBadWireType }")
+		g.P("c = c[n:]")
+	}
+}
+func (g *Generator) readPacked2(bytes int) {
+	if bytes >= 0 {
+		g.P("c = c[", bytes, ":]")
+	}
+	g.Out()
+	g.P("}") // end of for loop
+	if bytes > 1 {
+		g.P("if len(c) != 0 { return proto.ErrInternalBadWireType }")
+	}
+	g.P("break")
+	g.Out()
 	g.P("}")
 }
 
