@@ -1049,676 +1049,12 @@ func (o *Buffer) dec_slice_struct(p *Properties, is_group bool, base structPoint
 	return err
 }
 
-type UnpackMessageInfo struct {
-	// Function to make a new message of this type
-	Make func() unsafe.Pointer // TODO: exposes unsafe!  Return uintptr instead?
-
-	// Field information indexed by tag #
-	Dense  []UnpackFieldInfo
-	Sparse map[uint64]UnpackFieldInfo // TODO: populate this
-
-	// Offset of unrecognized byte slice
-	// For proto3, set to a sentinal value of 1.
-	UnrecognizedOffset uintptr
-}
-type UnpackFieldInfo struct {
-	// offset of the field in the proto message structure.
-	Offset uintptr
-
-	// function which knows how to unpack the field.
-	// b: data (after tag+wire type have been read)
-	// f: pointer to field
-	// sub: information about the submessage/group (if any)
-	// returns unused data
-	Unpack func(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte
-
-	// For message&group types, the info for the submessage/group. Nil otherwise.
-	Sub *UnpackMessageInfo
-}
-
-// TODO: we could encode the above structures in a compact form.
-// Make: ?
-// Dense/Sparse: add a slice of structures like
-//  byte: delta offset from last field
-//  byte: unpack function ID
-//  zigzag? varint: delta tag number from last field
-//  submessage: align to 4/8, pointer (only present for message/group fields)
-
-// This slice of bytes is an invalid varint.
-// Used to indicate an error on return.
-var errorData = [...]byte{128}
-var ErrorData = [...]byte{128}
-
-func UnpackFloat64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 8 {
-		return errorData[:]
-	}
-	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	g := (**float64)(f)
-	*g = &v
-	return b[8:]
-}
-
-func UnpackFloat64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 8 {
-		return errorData[:]
-	}
-	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	g := (*float64)(f)
-	*g = v
-	return b[8:]
-}
-
-func UnpackFloat64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 8 {
-		return errorData[:]
-	}
-	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	g := (*[]float64)(f)
-	*g = append(*g, v)
-	return b[8:]
-}
-
-func UnpackFloat32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	g := (**float32)(f)
-	*g = &v
-	return b[4:]
-}
-
-func UnpackFloat32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	g := (*float32)(f)
-	*g = v
-	return b[4:]
-}
-
-func UnpackFloat32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	g := (*[]float32)(f)
-	*g = append(*g, v)
-	return b[4:]
-}
-
-func UnpackInt64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int64(x)
-	g := (**int64)(f)
-	*g = &v
-	return b
-}
-
-func UnpackInt64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int64(x)
-	g := (*int64)(f)
-	*g = v
-	return b
-}
-
-func UnpackInt64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int64(x)
-	g := (*[]int64)(f)
-	*g = append(*g, v)
-	return b
-}
-
-func UnpackSint64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int64(x>>1) ^ int64(x)<<63>>63
-	g := (**int64)(f)
-	*g = &v
-	return b
-}
-
-func UnpackSint64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int64(x>>1) ^ int64(x)<<63>>63
-	g := (*int64)(f)
-	*g = v
-	return b
-}
-
-func UnpackSint64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int64(x>>1) ^ int64(x)<<63>>63
-	g := (*[]int64)(f)
-	*g = append(*g, v)
-	return b
-}
-
-func UnpackInt32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (**int32)(f)
-	*g = &v
-	return b
-}
-
-func UnpackInt32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (*int32)(f)
-	*g = v
-	return b
-}
-
-func UnpackInt32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (*[]int32)(f)
-	*g = append(*g, v)
-	return b
-}
-
-func UnpackSint32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x>>1) ^ int32(x)<<31>>31
-	g := (**int32)(f)
-	*g = &v
-	return b
-}
-
-func UnpackSint32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x>>1) ^ int32(x)<<31>>31
-	g := (*int32)(f)
-	*g = v
-	return b
-}
-
-func UnpackSint32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x>>1) ^ int32(x)<<31>>31
-	g := (*[]int32)(f)
-	*g = append(*g, v)
-	return b
-}
-
-func UnpackEnum_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	// TODO: do we need to validate that the enum is in range?
-	v := int32(x)
-	g := (**int32)(f)
-	*g = &v
-	return b
-}
-
-func UnpackEnum_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (*int32)(f)
-	*g = v
-	return b
-}
-
-func UnpackEnum_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (*[]int32)(f)
-	*g = append(*g, v)
-	return b
-}
-
-func UnpackBool_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 1 {
-		return errorData[:]
-	}
-	var v bool
-	if b[0] != 0 {
-		v = true
-	}
-	g := (**bool)(f)
-	*g = &v
-	return b[1:]
-}
-
-func UnpackBool_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 1 {
-		return errorData[:]
-	}
-	var v bool
-	if b[0] != 0 {
-		v = true
-	}
-	g := (*bool)(f)
-	*g = v
-	return b[1:]
-}
-
-func UnpackBool_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 1 {
-		return errorData[:]
-	}
-	var v bool
-	if b[0] != 0 {
-		v = true
-	}
-	g := (*[]bool)(f)
-	*g = append(*g, v)
-	return b[1:]
-}
-
-func UnpackFixed64_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 8 {
-		return errorData[:]
-	}
-	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
-	g := (**uint64)(f)
-	*g = &v
-	return b[8:]
-}
-
-func UnpackFixed64_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 8 {
-		return errorData[:]
-	}
-	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
-	g := (*uint64)(f)
-	*g = v
-	return b[8:]
-}
-
-func UnpackFixed64_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 8 {
-		return errorData[:]
-	}
-	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
-	g := (*[]uint64)(f)
-	*g = append(*g, v)
-	return b[8:]
-}
-
-func UnpackFixed32_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	g := (**uint32)(f)
-	*g = &v
-	return b[4:]
-}
-
-func UnpackFixed32_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	g := (*uint32)(f)
-	*g = v
-	return b[4:]
-}
-
-func UnpackFixed32_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	if len(b) < 4 {
-		return errorData[:]
-	}
-	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	g := (*[]uint32)(f)
-	*g = append(*g, v)
-	return b[4:]
-}
-
-func UnpackString_2(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := string(b[:x])
-	g := (**string)(f)
-	*g = &v
-	return b[x:]
-}
-
-func UnpackString_3(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := string(b[:x])
-	g := (*string)(f)
-	*g = v
-	return b[x:]
-}
-
-func UnpackString_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := string(b[:x])
-	g := (*[]string)(f)
-	*g = append(*g, v)
-	return b[x:]
-}
-
-func UnpackBytes(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := make([]byte, x)
-	copy(v, b)
-	g := (*[]byte)(f)
-	*g = v
-	return b[x:]
-}
-
-func UnpackBytes_R(b []byte, f unsafe.Pointer, _ *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := make([]byte, x)
-	copy(v, b)
-	g := (*[][]byte)(f)
-	*g = append(*g, v)
-	return b[x:]
-}
-
-func UnpackMessage(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := sub.Make()
-	err := UnmarshalMsg(b[:x], v, sub)
-	if err != nil {
-		// TODO: propagate error somehow?
-		return errorData[:]
-	}
-	g := (*unsafe.Pointer)(f)
-	*g = v
-	return b[x:]
-}
-
-func UnpackMessage_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	if x > uint64(len(b)) {
-		return errorData[:]
-	}
-	v := sub.Make()
-	err := UnmarshalMsg(b[:x], v, sub)
-	if err != nil {
-		// TODO: propagate error somehow?
-		return errorData[:]
-	}
-	g := (*[]unsafe.Pointer)(f)
-	*g = append(*g, v)
-	return b[x:]
-}
-
-func UnpackGroup(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
-	x, y := FindEndGroup(b)
-	if x < 0 {
-		return errorData[:]
-	}
-	v := sub.Make()
-	err := UnmarshalMsg(b[:x], v, sub)
-	if err != nil {
-		// TODO: propagate error somehow?
-		return errorData[:]
-	}
-	g := (*unsafe.Pointer)(f)
-	*g = v
-	return b[y:]
-	// TODO: there's no way to check that the EndGroup has the correct
-	// matching tag to the StartGroup. Do we need to fail if they don't match?
-}
-
-func UnpackGroup_R(b []byte, f unsafe.Pointer, sub *UnpackMessageInfo) []byte {
-	x, y := FindEndGroup(b)
-	if x < 0 {
-		return errorData[:]
-	}
-	v := sub.Make()
-	err := UnmarshalMsg(b[:x], v, sub)
-	if err != nil {
-		// TODO: propagate error somehow?
-		return errorData[:]
-	}
-	g := (*[]unsafe.Pointer)(f)
-	*g = append(*g, v)
-	return b[y:]
-	// TODO: there's no way to check that the EndGroup has the correct
-	// matching tag to the StartGroup. Do we need to fail if they don't match?
-}
-
-func UnmarshalMsg(b []byte, m unsafe.Pointer, u *UnpackMessageInfo) error {
-	for len(b) > 0 {
-		// Read tag and wire type.
-		x, n := DecodeVarint(b)
-		if n == 0 {
-			return io.ErrUnexpectedEOF
-		}
-		tag := x >> 3
-
-		// Dispatch on the tag to one of the Unpack* functions above.
-		var f UnpackFieldInfo
-		if tag < uint64(len(u.Dense)) {
-			f = u.Dense[tag]
-		} else {
-			f = u.Sparse[tag]
-		}
-		if fn := f.Unpack; fn != nil {
-			b = fn(b[n:], unsafe.Pointer(uintptr(m)+f.Offset), f.Sub)
-			continue
-		}
-
-		// Unknown tag.
-		if u.UnrecognizedOffset == 1 {
-			// proto3, don't keep unrecognized data.  Just skip it.
-			b = b[n:]
-			// Use wire type to skip data.
-			switch x & 7 {
-			case WireVarint:
-				_, k := DecodeVarint(b)
-				b = b[k:]
-			case WireFixed32:
-				b = b[4:]
-			case WireFixed64:
-				b = b[8:]
-			case WireBytes:
-				m, k := DecodeVarint(b)
-				b = b[uint64(k)+m:]
-			default:
-				// WireStartGroup, WireEndGroup not possible for proto3
-				return io.ErrUnexpectedEOF
-			}
-		} else {
-			// proto2, keep unrecognized data around.
-			z := (*[]byte)(unsafe.Pointer(uintptr(m) + u.UnrecognizedOffset))
-			*z = append(*z, b[:n]...) // tag value
-			b = b[n:]
-			// Use wire type to skip data.
-			switch x & 7 {
-			case WireVarint:
-				_, k := DecodeVarint(b)
-				*z = append(*z, b[:k]...)
-				b = b[k:]
-			case WireFixed32:
-				*z = append(*z, b[:4]...)
-				b = b[4:]
-			case WireFixed64:
-				*z = append(*z, b[:8]...)
-				b = b[8:]
-			case WireBytes:
-				m, k := DecodeVarint(b)
-				*z = append(*z, b[:uint64(k)+m]...)
-				b = b[uint64(k)+m:]
-			case WireStartGroup:
-				_, i := FindEndGroup(b)
-				if i == -1 {
-					return io.ErrUnexpectedEOF
-				}
-				*z = append(*z, b[:i]...)
-				b = b[i:]
-			default:
-				return io.ErrUnexpectedEOF
-			}
-		}
-	}
-	return nil
-}
-
-// FindEndGroup finds the index of the next EndGroup tag.
-// Groups may be nested, so the "next" EndGroup tag is the first
-// unpaired EndGroup.
-// FindEndGroup returns the indexes of the start and end of the EndGroup tag.
-// Returns (-1,-1) if it can't find one.
-func FindEndGroup(b []byte) (int, int) {
-	depth := 1
-	i := 0
-	for {
-		x, n := DecodeVarint(b[i:])
-		if n == 0 {
-			return -1, -1
-		}
-		j := i
-		i += n
-		switch x & 7 {
-		case WireVarint:
-			_, k := DecodeVarint(b[i:])
-			if k == 0 {
-				return -1, -1
-			}
-			i += k
-		case WireFixed32:
-			if i+4 > len(b) {
-				return -1, -1
-			}
-			i += 4
-		case WireFixed64:
-			if i+8 > len(b) {
-				return -1, -1
-			}
-			i += 8
-		case WireBytes:
-			m, k := DecodeVarint(b[i:])
-			if k == 0 {
-				return -1, -1
-			}
-			i += k
-			if i+int(m) > len(b) {
-				return -1, -1
-			}
-			i += int(m)
-		case WireStartGroup:
-			depth++
-		case WireEndGroup:
-			depth--
-			if depth == 0 {
-				return j, i
-			}
-		default:
-			return -1, -1
-		}
-	}
-}
-
 // SkipUnrecognized parses and skips any unrecognized tag.
 // b is the data stream (after the tag/wiretype has been parsed).
 // x is the tag/wiretype decoded from the byte stream.
 // u is the place to store the skipped data, or nil if that is not needed.
 // Returns the remaining unparsed bytes.
+// Note: this is a helper function for the fully custom decoder.
 func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 	switch x & 7 {
 	case WireVarint:
@@ -1778,6 +1114,65 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 	// TODO: modify EncodeVarint to append to a slice?  That would avoid an unnecessary allocation.
 }
 
+// This slice of bytes is an invalid varint.
+// Used to indicate an error on return.
+var errorData = [...]byte{128}
+
+// FindEndGroup finds the index of the next EndGroup tag.
+// Groups may be nested, so the "next" EndGroup tag is the first
+// unpaired EndGroup.
+// FindEndGroup returns the indexes of the start and end of the EndGroup tag.
+// Returns (-1,-1) if it can't find one.
+func FindEndGroup(b []byte) (int, int) {
+	depth := 1
+	i := 0
+	for {
+		x, n := DecodeVarint(b[i:])
+		if n == 0 {
+			return -1, -1
+		}
+		j := i
+		i += n
+		switch x & 7 {
+		case WireVarint:
+			_, k := DecodeVarint(b[i:])
+			if k == 0 {
+				return -1, -1
+			}
+			i += k
+		case WireFixed32:
+			if i+4 > len(b) {
+				return -1, -1
+			}
+			i += 4
+		case WireFixed64:
+			if i+8 > len(b) {
+				return -1, -1
+			}
+			i += 8
+		case WireBytes:
+			m, k := DecodeVarint(b[i:])
+			if k == 0 {
+				return -1, -1
+			}
+			i += k
+			if i+int(m) > len(b) {
+				return -1, -1
+			}
+			i += int(m)
+		case WireStartGroup:
+			depth++
+		case WireEndGroup:
+			depth--
+			if depth == 0 {
+				return j, i
+			}
+		default:
+			return -1, -1
+		}
+	}
+}
+
 type UnmarshalInfo struct {
 	typ reflect.Type // type of the struct
 
@@ -1792,8 +1187,9 @@ type UnmarshalInfo struct {
 
 // An unmarshaler takes a stream of bytes and a pointer to a field of a message.
 // It decodes the field and stores it at f and returns the unused bytes.
-// b is the data after the tag+wiretype have been read
-type unmarshaler func(b []byte, f unsafe.Pointer) []byte
+// w is the wire encoding.
+// b is the data after the tag and wire encoding have been read
+type unmarshaler func(b []byte, f unsafe.Pointer, w int) []byte
 
 type unmarshalFieldInfo struct {
 	// offset of the field in the proto message structure.
@@ -1838,20 +1234,22 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		// Read tag and wire type.
 		// Special case 1 and 2 byte varints.
 		var x uint64
-		var n int
 		if b[0] < 128 {
 			x = uint64(b[0])
-			n = 1
+			b = b[1:]
 		} else if len(b) >= 2 && b[1] < 128 {
 			x = uint64(b[0]&0x7f) + uint64(b[1])<<7
-			n = 2
+			b = b[2:]
 		} else {
+			var n int
 			x, n = DecodeVarint(b)
 			if n == 0 {
 				return io.ErrUnexpectedEOF
 			}
+			b = b[n:]
 		}
 		tag := x >> 3
+		wire := int(x) & 7
 
 		// Dispatch on the tag to one of the unmarshal* functions below.
 		var f unmarshalFieldInfo
@@ -1861,7 +1259,7 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 			f = u.sparse[tag]
 		}
 		if fn := f.unmarshal; fn != nil {
-			b = fn(b[n:], unsafe.Pointer(uintptr(m)+f.offset))
+			b = fn(b, unsafe.Pointer(uintptr(m)+f.offset), wire)
 			continue
 		}
 
@@ -1869,11 +1267,13 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		// TODO: handle extensions here.
 		if u.unrecognized == 1 {
 			// proto3, don't keep unrecognized data.  Just skip it.
-			b = b[n:]
 			// Use wire type to skip data.
-			switch x & 7 {
+			switch wire {
 			case WireVarint:
 				_, k := DecodeVarint(b)
+				if len(b) < k {
+					return io.ErrUnexpectedEOF
+				}
 				b = b[k:]
 			case WireFixed32:
 				if len(b) < 4 {
@@ -1898,12 +1298,14 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		} else {
 			// proto2, keep unrecognized data around.
 			z := (*[]byte)(unsafe.Pointer(uintptr(m) + u.unrecognized))
-			*z = append(*z, b[:n]...) // tag value
-			b = b[n:]
+			*z = encodeVarint(*z, tag<<3|uint64(wire))
 			// Use wire type to skip data.
-			switch x & 7 {
+			switch wire {
 			case WireVarint:
 				_, k := DecodeVarint(b)
+				if len(b) < k {
+					return io.ErrUnexpectedEOF
+				}
 				*z = append(*z, b[:k]...)
 				b = b[k:]
 			case WireFixed32:
@@ -2240,7 +1642,7 @@ func typeUnmarshaler(t reflect.Type, tags string) unmarshaler {
 
 // Below are all the unmarshalers for individual fields of various types.
 
-func unmarshalFloat64Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFloat64Value(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2250,7 +1652,7 @@ func unmarshalFloat64Value(b []byte, f unsafe.Pointer) []byte {
 	return b[8:]
 }
 
-func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2260,17 +1662,38 @@ func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b[8:]
 }
 
-func unmarshalFloat64Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFloat64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]float64)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			if len(b) < 8 {
+				return errorData[:]
+			}
+			v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
+			*g = append(*g, v)
+			b = b[8:]
+		}
+		return res
+	}
 	if len(b) < 8 {
 		return errorData[:]
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
-	g := (*[]float64)(f)
 	*g = append(*g, v)
 	return b[8:]
 }
 
-func unmarshalFloat32Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFloat32Value(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2280,7 +1703,7 @@ func unmarshalFloat32Value(b []byte, f unsafe.Pointer) []byte {
 	return b[4:]
 }
 
-func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2290,17 +1713,38 @@ func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b[4:]
 }
 
-func unmarshalFloat32Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFloat32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]float32)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			if len(b) < 4 {
+				return errorData[:]
+			}
+			v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
+			*g = append(*g, v)
+			b = b[4:]
+		}
+		return res
+	}
 	if len(b) < 4 {
 		return errorData[:]
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
-	g := (*[]float32)(f)
 	*g = append(*g, v)
 	return b[4:]
 }
 
-func unmarshalInt64Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalInt64Value(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2312,7 +1756,7 @@ func unmarshalInt64Value(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalInt64Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalInt64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2324,19 +1768,41 @@ func unmarshalInt64Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalInt64Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalInt64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]int64)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			x, n = DecodeVarint(b)
+			if n == 0 {
+				return errorData[:]
+			}
+			b = b[n:]
+			v := int64(x)
+			*g = append(*g, v)
+		}
+		return res
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
 	}
 	b = b[n:]
 	v := int64(x)
-	g := (*[]int64)(f)
 	*g = append(*g, v)
 	return b
 }
 
-func unmarshalSint64Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalSint64Value(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2348,7 +1814,7 @@ func unmarshalSint64Value(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalSint64Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalSint64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2360,19 +1826,41 @@ func unmarshalSint64Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalSint64Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalSint64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]int64)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			x, n = DecodeVarint(b)
+			if n == 0 {
+				return errorData[:]
+			}
+			b = b[n:]
+			v := int64(x>>1) ^ int64(x)<<63>>63
+			*g = append(*g, v)
+		}
+		return res
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
-	g := (*[]int64)(f)
 	*g = append(*g, v)
 	return b
 }
 
-func unmarshalInt32Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalInt32Value(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2384,7 +1872,7 @@ func unmarshalInt32Value(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalInt32Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalInt32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2396,19 +1884,41 @@ func unmarshalInt32Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalInt32Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalInt32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]int32)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			x, n = DecodeVarint(b)
+			if n == 0 {
+				return errorData[:]
+			}
+			b = b[n:]
+			v := int32(x)
+			*g = append(*g, v)
+		}
+		return res
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
 	}
 	b = b[n:]
 	v := int32(x)
-	g := (*[]int32)(f)
 	*g = append(*g, v)
 	return b
 }
 
-func unmarshalSint32Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalSint32Value(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2420,7 +1930,7 @@ func unmarshalSint32Value(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalSint32Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalSint32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2432,60 +1942,45 @@ func unmarshalSint32Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b
 }
 
-func unmarshalSint32Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalSint32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]int32)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			x, n = DecodeVarint(b)
+			if n == 0 {
+				return errorData[:]
+			}
+			b = b[n:]
+			v := int32(x>>1) ^ int32(x)<<31>>31
+			*g = append(*g, v)
+		}
+		return res
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
-	g := (*[]int32)(f)
 	*g = append(*g, v)
 	return b
 }
 
-func unmarshalEnumValue(b []byte, f unsafe.Pointer) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (*int32)(f)
-	*g = v
-	return b
-}
-
-func unmarshalEnumPtr(b []byte, f unsafe.Pointer) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-
-	v := int32(x)
-	g := (**int32)(f)
-	*g = &v
-	return b
-}
-
-func unmarshalEnumSlice(b []byte, f unsafe.Pointer) []byte {
-	x, n := DecodeVarint(b)
-	if n == 0 {
-		return errorData[:]
-	}
-	b = b[n:]
-	v := int32(x)
-	g := (*[]int32)(f)
-	*g = append(*g, v)
-	return b
-}
-
-func unmarshalBoolValue(b []byte, f unsafe.Pointer) []byte {
+func unmarshalBoolValue(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 1 {
 		return errorData[:]
 	}
-	var v bool
+	v := false
 	if b[0] != 0 {
 		v = true
 	}
@@ -2494,11 +1989,11 @@ func unmarshalBoolValue(b []byte, f unsafe.Pointer) []byte {
 	return b[1:]
 }
 
-func unmarshalBoolPtr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalBoolPtr(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 1 {
 		return errorData[:]
 	}
-	var v bool
+	v := false
 	if b[0] != 0 {
 		v = true
 	}
@@ -2507,20 +2002,41 @@ func unmarshalBoolPtr(b []byte, f unsafe.Pointer) []byte {
 	return b[1:]
 }
 
-func unmarshalBoolSlice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalBoolSlice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]bool)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			v := false
+			if b[0] != 0 {
+				v = true
+			}
+			*g = append(*g, v)
+			b = b[1:]
+		}
+		return res
+	}
 	if len(b) < 1 {
 		return errorData[:]
 	}
-	var v bool
+	v := false
 	if b[0] != 0 {
 		v = true
 	}
-	g := (*[]bool)(f)
 	*g = append(*g, v)
 	return b[1:]
 }
 
-func unmarshalFixed64Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFixed64Value(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2530,7 +2046,7 @@ func unmarshalFixed64Value(b []byte, f unsafe.Pointer) []byte {
 	return b[8:]
 }
 
-func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 8 {
 		return errorData[:]
 	}
@@ -2540,17 +2056,38 @@ func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b[8:]
 }
 
-func unmarshalFixed64Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFixed64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]uint64)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			if len(b) < 8 {
+				return errorData[:]
+			}
+			v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+			*g = append(*g, v)
+			b = b[8:]
+		}
+		return res
+	}
 	if len(b) < 8 {
 		return errorData[:]
 	}
 	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
-	g := (*[]uint64)(f)
 	*g = append(*g, v)
 	return b[8:]
 }
 
-func unmarshalFixed32Value(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFixed32Value(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2560,7 +2097,7 @@ func unmarshalFixed32Value(b []byte, f unsafe.Pointer) []byte {
 	return b[4:]
 }
 
-func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
 	if len(b) < 4 {
 		return errorData[:]
 	}
@@ -2570,17 +2107,38 @@ func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer) []byte {
 	return b[4:]
 }
 
-func unmarshalFixed32Slice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalFixed32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+	g := (*[]uint32)(f)
+	if w == WireBytes { // packed
+		x, n := DecodeVarint(b)
+		if n == 0 {
+			return errorData[:]
+		}
+		b = b[n:]
+		if x > uint64(len(b)) {
+			return errorData[:]
+		}
+		res := b[x:]
+		b = b[:x]
+		for len(b) > 0 {
+			if len(b) < 4 {
+				return errorData[:]
+			}
+			v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+			*g = append(*g, v)
+			b = b[4:]
+		}
+		return res
+	}
 	if len(b) < 4 {
 		return errorData[:]
 	}
 	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	g := (*[]uint32)(f)
 	*g = append(*g, v)
 	return b[4:]
 }
 
-func unmarshalStringValue(b []byte, f unsafe.Pointer) []byte {
+func unmarshalStringValue(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2595,7 +2153,7 @@ func unmarshalStringValue(b []byte, f unsafe.Pointer) []byte {
 	return b[x:]
 }
 
-func unmarshalStringPtr(b []byte, f unsafe.Pointer) []byte {
+func unmarshalStringPtr(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2610,7 +2168,7 @@ func unmarshalStringPtr(b []byte, f unsafe.Pointer) []byte {
 	return b[x:]
 }
 
-func unmarshalStringSlice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalStringSlice(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2625,7 +2183,7 @@ func unmarshalStringSlice(b []byte, f unsafe.Pointer) []byte {
 	return b[x:]
 }
 
-func unmarshalBytesValue(b []byte, f unsafe.Pointer) []byte {
+func unmarshalBytesValue(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2641,7 +2199,7 @@ func unmarshalBytesValue(b []byte, f unsafe.Pointer) []byte {
 	return b[x:]
 }
 
-func unmarshalBytesSlice(b []byte, f unsafe.Pointer) []byte {
+func unmarshalBytesSlice(b []byte, f unsafe.Pointer, w int) []byte {
 	x, n := DecodeVarint(b)
 	if n == 0 {
 		return errorData[:]
@@ -2658,7 +2216,7 @@ func unmarshalBytesSlice(b []byte, f unsafe.Pointer) []byte {
 }
 
 func makeUnmarshalMessagePtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) []byte {
 		x, n := DecodeVarint(b)
 		if n == 0 {
 			return errorData[:]
@@ -2679,7 +2237,7 @@ func makeUnmarshalMessagePtr(sub *UnmarshalInfo) unmarshaler {
 }
 
 func makeUnmarshalMessageSlicePtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) []byte {
 		x, n := DecodeVarint(b)
 		if n == 0 {
 			return errorData[:]
@@ -2700,7 +2258,7 @@ func makeUnmarshalMessageSlicePtr(sub *UnmarshalInfo) unmarshaler {
 }
 
 func makeUnmarshalGroupPtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) []byte {
 		x, y := FindEndGroup(b)
 		if x < 0 {
 			return errorData[:]
@@ -2717,7 +2275,7 @@ func makeUnmarshalGroupPtr(sub *UnmarshalInfo) unmarshaler {
 }
 
 func makeUnmarshalGroupSlicePtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) []byte {
 		x, y := FindEndGroup(b)
 		if x < 0 {
 			return errorData[:]
@@ -2737,7 +2295,7 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 	t := f.Type
 	unmarshalKey := typeUnmarshaler(f.Type.Key(), f.Tag.Get("protobuf_key"))
 	unmarshalVal := typeUnmarshaler(f.Type.Elem(), f.Tag.Get("protobuf_val"))
-	return func(b []byte, f unsafe.Pointer) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) []byte {
 		// The map entry is a submessage. Figure out how big it is.
 		x, n := DecodeVarint(b)
 		if n == 0 {
@@ -2765,9 +2323,9 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 			b = b[n:]
 			switch x >> 3 {
 			case 1:
-				b = unmarshalKey(b, unsafe.Pointer(k.Pointer()))
+				b = unmarshalKey(b, unsafe.Pointer(k.Pointer()), int(x)&7)
 			case 2:
-				b = unmarshalVal(b, unsafe.Pointer(v.Pointer()))
+				b = unmarshalVal(b, unsafe.Pointer(v.Pointer()), int(x)&7)
 			}
 		}
 
@@ -2797,14 +2355,14 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 // unmarshal is the unmarshaler for the base type of the oneof case (e.g. int64).
 // Note that this function will be called once for each case in the oneof.
 func makeUnmarshalOneof(typ, ityp reflect.Type, unmarshal unmarshaler) unmarshaler {
-	return func(b []byte, f unsafe.Pointer) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) []byte {
 		// Allocate holder for value.
 		v := reflect.New(typ)
 
 		// Unmarshal data into holder.
 		// The holder only has one field, so the field location is
 		// the same as the holder itself.
-		b = unmarshal(b, unsafe.Pointer(v.Pointer()))
+		b = unmarshal(b, unsafe.Pointer(v.Pointer()), w)
 
 		// Write pointer to holder into target field.
 		reflect.NewAt(ityp, f).Elem().Set(v)

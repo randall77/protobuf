@@ -117,6 +117,15 @@ func (p *Buffer) EncodeVarint(x uint64) error {
 	return nil
 }
 
+// encodeVarint appends a varint-encoded integer to b and returns the result.
+func encodeVarint(b []byte, x uint64) []byte {
+	for x >= 1<<7 {
+		b = append(b, byte(x&0x7f|0x80))
+		x >>= 7
+	}
+	return append(b, byte(x))
+}
+
 // SizeVarint returns the varint encoding size of an integer.
 func SizeVarint(x uint64) int {
 	return sizeVarint(x)
