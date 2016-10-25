@@ -1866,6 +1866,7 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		}
 
 		// Unknown tag.
+		// TODO: handle extensions here.
 		if u.unrecognized == 1 {
 			// proto3, don't keep unrecognized data.  Just skip it.
 			b = b[n:]
@@ -1875,11 +1876,20 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 				_, k := DecodeVarint(b)
 				b = b[k:]
 			case WireFixed32:
+				if len(b) < 4 {
+					return io.ErrUnexpectedEOF
+				}
 				b = b[4:]
 			case WireFixed64:
+				if len(b) < 8 {
+					return io.ErrUnexpectedEOF
+				}
 				b = b[8:]
 			case WireBytes:
 				m, k := DecodeVarint(b)
+				if uint64(len(b)) < uint64(k)+m {
+					return io.ErrUnexpectedEOF
+				}
 				b = b[uint64(k)+m:]
 			default:
 				// WireStartGroup, WireEndGroup not possible for proto3
@@ -1897,13 +1907,22 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 				*z = append(*z, b[:k]...)
 				b = b[k:]
 			case WireFixed32:
+				if len(b) < 4 {
+					return io.ErrUnexpectedEOF
+				}
 				*z = append(*z, b[:4]...)
 				b = b[4:]
 			case WireFixed64:
+				if len(b) < 8 {
+					return io.ErrUnexpectedEOF
+				}
 				*z = append(*z, b[:8]...)
 				b = b[8:]
 			case WireBytes:
 				m, k := DecodeVarint(b)
+				if uint64(len(b)) < uint64(k)+m {
+					return io.ErrUnexpectedEOF
+				}
 				*z = append(*z, b[:uint64(k)+m]...)
 				b = b[uint64(k)+m:]
 			case WireStartGroup:
@@ -1973,6 +1992,10 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 			u.unrecognized = f.Offset
 			continue
 		}
+		if f.Name == "XXX_InternalExtensions" {
+			// TODO: save offset, use for extension processing
+			continue
+		}
 		oneof := f.Tag.Get("protobuf_oneof")
 		if oneof != "" {
 			oneofFields = append(oneofFields, oneofField{f.Type, f.Offset})
@@ -2037,6 +2060,9 @@ func (u *UnmarshalInfo) setTag(tag int, n int, offset uintptr, unmarshal unmarsh
 		}
 		u.dense[tag] = i
 	} else {
+		if u.sparse == nil {
+			u.sparse = map[uint64]unmarshalFieldInfo{}
+		}
 		u.sparse[uint64(tag)] = i
 	}
 
@@ -2194,7 +2220,7 @@ func typeUnmarshaler(t reflect.Type, tags string) unmarshaler {
 	case reflect.Struct:
 		// message or group field
 		if !pointer {
-			panic("message/group field without pointer")
+			panic(fmt.Sprintf("message/group field %s:%s without pointer", t, encoding))
 		}
 		switch encoding {
 		case "bytes":
@@ -2727,12 +2753,10 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 		// Note: we could use #keys * #values ~= 200 functions
 		// to do map decoding without reflection. Probably not worth it.
 		// Maps will be somewhat slow. Oh well.
-		kt := t.Key()
-		vt := t.Elem()
 
 		// Read key and value from data.
-		k := reflect.New(kt)
-		v := reflect.New(vt)
+		k := reflect.New(t.Key())
+		v := reflect.New(t.Elem())
 		for len(b) > 0 {
 			x, n := DecodeVarint(b)
 			if n == 0 {

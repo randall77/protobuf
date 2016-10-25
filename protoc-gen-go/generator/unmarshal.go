@@ -44,7 +44,7 @@ import (
 
 func (g *Generator) generateUnmarshalCode(message *Descriptor) {
 	g.generateUnmarshalFullCustom(message)
-	g.generateUnmarshalTableDriven(message)
+	//g.generateUnmarshalTableDriven(message)
 	g.generateUnmarshalReflectTable(message)
 }
 
