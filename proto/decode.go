@@ -476,7 +476,7 @@ type Unmarshaler interface {
 // Unmarshal resets pb before starting to unmarshal, so any
 // existing data in pb is always removed. Use UnmarshalMerge
 // to preserve and append to existing data.
-func Unmarshal2(buf []byte, pb Message) error {
+func Unmarshal(buf []byte, pb Message) error {
 	pb.Reset()
 	return UnmarshalMerge(buf, pb)
 }
@@ -487,7 +487,7 @@ func Unmarshal2(buf []byte, pb Message) error {
 //
 // UnmarshalMerge merges into existing data in pb.
 // Most code should use Unmarshal instead.
-func UnmarshalMerge2(buf []byte, pb Message) error {
+func UnmarshalMerge(buf []byte, pb Message) error {
 	// If the object can unmarshal itself, let it.
 	if u, ok := pb.(Unmarshaler); ok {
 		return u.Unmarshal(buf)
@@ -1182,18 +1182,20 @@ type UnmarshalInfo struct {
 
 	// 0 = only typ field is initialized
 	// 1 = completely initialized
-	initialized  int32
-	lock         sync.Mutex                    // prevents double initialization
-	dense        []unmarshalFieldInfo          // fields indexed by tag #
-	sparse       map[uint64]unmarshalFieldInfo // fields indexed by tag #
-	unrecognized uintptr                       // offset of []byte to put unrecognized data (or 1 if we should throw it away)
-	reqMask      uint64                        // mask with a 1 for each required field (up to 64)
+	initialized     int32
+	lock            sync.Mutex                    // prevents double initialization
+	dense           []unmarshalFieldInfo          // fields indexed by tag #
+	sparse          map[uint64]unmarshalFieldInfo // fields indexed by tag #
+	unrecognized    uintptr                       // offset of []byte to put unrecognized data (or 1 if we should throw it away)
+	extensions      uintptr                       // offset of extensions field (of type proto.XXX_InternalExtensions), or 1 if it does not exist
+	extensionRanges []ExtensionRange
+	reqMask         uint64 // mask with a 1 for each required field (up to 64)
 }
 
 // An unmarshaler takes a stream of bytes and a pointer to a field of a message.
-// It decodes the field and stores it at f and returns the unused bytes.
+// It decodes the field, stores it at f, and returns the unused bytes.
 // w is the wire encoding.
-// b is the data after the tag and wire encoding have been read
+// b is the data after the tag and wire encoding have been read.
 type unmarshaler func(b []byte, f unsafe.Pointer, w int) ([]byte, error)
 
 type unmarshalFieldInfo struct {
@@ -1206,34 +1208,8 @@ type unmarshalFieldInfo struct {
 	reqMask uint64 // all one bits, execept one zero bit at this field's index in the required field list.
 }
 
-func Unmarshal(buf []byte, pb Message) error {
-	pb.Reset()
-	v := reflect.ValueOf(pb)
-	t := v.Type().Elem()
-	u := getUnmarshalInfo(t)
-	m := unsafe.Pointer(v.Pointer())
-	return u.unmarshal(m, buf)
-}
-func UnmarshalMerge(buf []byte, pb Message) error {
-	v := reflect.ValueOf(pb)
-	t := v.Type().Elem()
-	u := getUnmarshalInfo(t)
-	m := unsafe.Pointer(v.Pointer())
-	//m := (*[2]unsafe.Pointer)(unsafe.Pointer(&pb))[1]
-	return u.unmarshal(m, buf)
-}
 func (b *Buffer) DecodeMessage(pb Message) error {
-	if pb == b.lastMsg {
-		return b.lastUnmarshalInfo.unmarshal(b.lastPtr, b.buf)
-	}
-	v := reflect.ValueOf(pb)
-	t := v.Type().Elem()
-	u := getUnmarshalInfo(t)
-	m := unsafe.Pointer(v.Pointer())
-	b.lastMsg = pb
-	b.lastPtr = m
-	b.lastUnmarshalInfo = u
-	return u.unmarshal(m, b.buf)
+	panic("DecodeMessage")
 }
 func (b *Buffer) DecodeGroup(pb Message) error {
 	panic("DecodeGroup")
@@ -1284,6 +1260,7 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		u.computeUnmarshalInfo()
 	}
 	reqMask := u.reqMask
+	var rnse error // An instance of a RequiredNotSetError returned by a submessage.
 	for len(b) > 0 {
 		// Read tag and wire type.
 		// Special case 1 and 2 byte varints.
@@ -1316,13 +1293,19 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		if fn := f.unmarshal; fn != nil {
 			var err error
 			b, err = fn(b, unsafe.Pointer(uintptr(m)+f.offset), wire)
-			if err != nil {
-				if err == errInternalBadWireType {
-					err = fmt.Errorf("bad wiretype for field at offset %d: got wiretype %d", f.offset, wire)
-				}
-				return err
+			if err == nil {
+				continue
 			}
-			continue
+			if _, ok := err.(*RequiredNotSetError); ok {
+				// Remember this error, but keep parsing. We need to produce
+				// a full parse even if a required field is missing.
+				rnse = err
+				continue
+			}
+			if err == errInternalBadWireType {
+				err = fmt.Errorf("bad wiretype for field at offset %d: got wiretype %d", f.offset, wire)
+			}
+			return err
 		}
 
 		// Unknown tag.
@@ -1359,7 +1342,18 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 			}
 		} else {
 			// proto2, keep unrecognized data around.
+			// maybe in extensions, maybe in the unrecognized field.
 			z := (*[]byte)(unsafe.Pointer(uintptr(m) + u.unrecognized))
+			var emap map[int32]Extension
+			var e Extension
+			for _, r := range u.extensionRanges {
+				if uint64(r.Start) <= tag && tag <= uint64(r.End) {
+					mp := (*XXX_InternalExtensions)(unsafe.Pointer(uintptr(m) + u.extensions))
+					emap = mp.extensionsWrite()
+					e = emap[int32(tag)]
+					z = &e.enc
+				}
+			}
 			*z = encodeVarint(*z, tag<<3|uint64(wire))
 			// Use wire type to skip data.
 			switch wire {
@@ -1399,9 +1393,18 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 			default:
 				return fmt.Errorf("proto: can't skip unknown wire type %d for %s", wire, u.typ)
 			}
+			if emap != nil {
+				emap[int32(tag)] = e
+			}
 		}
 	}
+	if rnse != nil {
+		// A required field of a submessage/group is missing. Return that error.
+		return rnse
+	}
 	if reqMask != 0 {
+		// A field of this message is missing.
+		// TODO: get its name from a bit that's still set. Will need to update tests if so.
 		return &RequiredNotSetError{"{Unknown}"}
 	}
 	return nil
@@ -1443,6 +1446,7 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 	// Set up the "not found" value for the unrecognized byte buffer.
 	// This is the default for proto3.
 	u.unrecognized = 1
+	u.extensions = 1
 
 	// List of the generated type and offset for each oneof field.
 	type oneofField struct {
@@ -1461,6 +1465,7 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 		}
 		if f.Name == "XXX_InternalExtensions" {
 			// TODO: save offset, use for extension processing
+			u.extensions = f.Offset
 			continue
 		}
 		oneof := f.Tag.Get("protobuf_oneof")
@@ -1515,6 +1520,15 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 		}
 	}
 
+	// Get extension ranges, if any.
+	fn = reflect.Zero(reflect.PtrTo(t)).MethodByName("ExtensionRangeArray")
+	if fn.IsValid() {
+		if u.extensions == 1 {
+			panic("a message with extensions, but no extensions field")
+		}
+		u.extensionRanges = fn.Call(nil)[0].Interface().([]ExtensionRange)
+	}
+
 	atomic.StoreInt32(&u.initialized, 1)
 }
 
@@ -1558,7 +1572,7 @@ func fieldUnmarshaler(f *reflect.StructField) unmarshaler {
 func typeUnmarshaler(t reflect.Type, tags string) unmarshaler {
 	tagArray := strings.Split(tags, ",")
 	encoding := tagArray[0]
-	var name = "unknown"
+	name := "unknown"
 	if len(tagArray) >= 4 && strings.HasPrefix(tagArray[3], "name=") {
 		name = tagArray[3][5:]
 	}
@@ -2406,6 +2420,10 @@ func makeUnmarshalMessagePtr(sub *UnmarshalInfo, name string) unmarshaler {
 			return nil, io.ErrUnexpectedEOF
 		}
 		g := (*unsafe.Pointer)(f)
+		// First read the message field to see if something is there.
+		// The semantics of multiple submessages are weird.  Instead of
+		// the last one winning (as it is for all other fields), multiple
+		// submessages are merged.
 		v := *g
 		if v == nil {
 			v = unsafe.Pointer(reflect.New(sub.typ).Pointer())
@@ -2415,6 +2433,7 @@ func makeUnmarshalMessagePtr(sub *UnmarshalInfo, name string) unmarshaler {
 		if err != nil {
 			if rnse, ok := err.(*RequiredNotSetError); ok {
 				rnse.field = name + "." + rnse.field
+				return b[x:], err
 			}
 			return nil, err
 		}
@@ -2440,6 +2459,9 @@ func makeUnmarshalMessageSlicePtr(sub *UnmarshalInfo, name string) unmarshaler {
 		if err != nil {
 			if rnse, ok := err.(*RequiredNotSetError); ok {
 				rnse.field = name + "." + rnse.field
+				g := (*[]unsafe.Pointer)(f)
+				*g = append(*g, v)
+				return b[x:], err
 			}
 			return nil, err
 		}
@@ -2463,6 +2485,8 @@ func makeUnmarshalGroupPtr(sub *UnmarshalInfo, name string) unmarshaler {
 		if err != nil {
 			if rnse, ok := err.(*RequiredNotSetError); ok {
 				rnse.field = name + "." + rnse.field
+				*(*unsafe.Pointer)(f) = v
+				return b[y:], err
 			}
 			return nil, err
 		}
@@ -2486,6 +2510,9 @@ func makeUnmarshalGroupSlicePtr(sub *UnmarshalInfo, name string) unmarshaler {
 		if err != nil {
 			if rnse, ok := err.(*RequiredNotSetError); ok {
 				rnse.field = name + "." + rnse.field
+				g := (*[]unsafe.Pointer)(f)
+				*g = append(*g, v)
+				return b[y:], err
 			}
 			return nil, err
 		}
