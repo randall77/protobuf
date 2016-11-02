@@ -272,6 +272,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"unsafe"
 )
 
 // Message is implemented by generated protocol buffer messages.
@@ -320,6 +321,13 @@ type Buffer struct {
 	int64s   []int64
 	float32s []float32
 	float64s []float64
+
+	// the last message to be decoded by this Buffer.
+	// this data is a cache for information that would otherwise
+	// require some reflect calls to get.
+	lastMsg           Message        // the last message we unmarshaled
+	lastPtr           unsafe.Pointer // raw pointer to last message
+	lastUnmarshalInfo *UnmarshalInfo // unmarshal info for last message
 }
 
 // NewBuffer allocates a new Buffer and initializes its internal data to

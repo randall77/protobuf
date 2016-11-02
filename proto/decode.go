@@ -56,6 +56,9 @@ var errOverflow = errors.New("proto: integer overflow")
 // wire type is encountered. It does not get returned to user code.
 var ErrInternalBadWireType = errors.New("proto: internal error: bad wiretype for oneof")
 
+// Error used by decode internally.
+var errInternalBadWireType = errors.New("proto: internal error: bad wiretype for oneof")
+
 // The fundamental decoders that interpret bytes on the wire.
 // Those that take integer types all return uint64 and are
 // therefore of type valueDecoder.
@@ -473,7 +476,7 @@ type Unmarshaler interface {
 // Unmarshal resets pb before starting to unmarshal, so any
 // existing data in pb is always removed. Use UnmarshalMerge
 // to preserve and append to existing data.
-func Unmarshal(buf []byte, pb Message) error {
+func Unmarshal2(buf []byte, pb Message) error {
 	pb.Reset()
 	return UnmarshalMerge(buf, pb)
 }
@@ -484,7 +487,7 @@ func Unmarshal(buf []byte, pb Message) error {
 //
 // UnmarshalMerge merges into existing data in pb.
 // Most code should use Unmarshal instead.
-func UnmarshalMerge(buf []byte, pb Message) error {
+func UnmarshalMerge2(buf []byte, pb Message) error {
 	// If the object can unmarshal itself, let it.
 	if u, ok := pb.(Unmarshaler); ok {
 		return u.Unmarshal(buf)
@@ -493,7 +496,7 @@ func UnmarshalMerge(buf []byte, pb Message) error {
 }
 
 // DecodeMessage reads a count-delimited message from the Buffer.
-func (p *Buffer) DecodeMessage(pb Message) error {
+func (p *Buffer) DecodeMessage2(pb Message) error {
 	enc, err := p.DecodeRawBytes(false)
 	if err != nil {
 		return err
@@ -502,7 +505,7 @@ func (p *Buffer) DecodeMessage(pb Message) error {
 }
 
 // DecodeGroup reads a tag-delimited group from the Buffer.
-func (p *Buffer) DecodeGroup(pb Message) error {
+func (p *Buffer) DecodeGroup2(pb Message) error {
 	typ, base, err := getbase(pb)
 	if err != nil {
 		return err
@@ -516,7 +519,7 @@ func (p *Buffer) DecodeGroup(pb Message) error {
 // unpredictable.
 //
 // Unlike proto.Unmarshal, this does not reset pb before starting to unmarshal.
-func (p *Buffer) Unmarshal(pb Message) error {
+func (p *Buffer) Unmarshal2(pb Message) error {
 	// If the object can unmarshal itself, let it.
 	if u, ok := pb.(Unmarshaler); ok {
 		err := u.Unmarshal(p.buf[p.index:])
@@ -1117,6 +1120,8 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 // Used to indicate an error on return.
 var errorData = [...]byte{128}
 
+var errorDataBadWire = [...]byte{129} // bad wire type
+
 // FindEndGroup finds the index of the next EndGroup tag.
 // Groups may be nested, so the "next" EndGroup tag is the first
 // unpaired EndGroup.
@@ -1182,13 +1187,14 @@ type UnmarshalInfo struct {
 	dense        []unmarshalFieldInfo          // fields indexed by tag #
 	sparse       map[uint64]unmarshalFieldInfo // fields indexed by tag #
 	unrecognized uintptr                       // offset of []byte to put unrecognized data (or 1 if we should throw it away)
+	reqMask      uint64                        // mask with a 1 for each required field (up to 64)
 }
 
 // An unmarshaler takes a stream of bytes and a pointer to a field of a message.
 // It decodes the field and stores it at f and returns the unused bytes.
 // w is the wire encoding.
 // b is the data after the tag and wire encoding have been read
-type unmarshaler func(b []byte, f unsafe.Pointer, w int) []byte
+type unmarshaler func(b []byte, f unsafe.Pointer, w int) ([]byte, error)
 
 type unmarshalFieldInfo struct {
 	// offset of the field in the proto message structure.
@@ -1196,6 +1202,54 @@ type unmarshalFieldInfo struct {
 
 	// function to unmarshal the data for the field.
 	unmarshal unmarshaler
+
+	reqMask uint64 // all one bits, execept one zero bit at this field's index in the required field list.
+}
+
+func Unmarshal(buf []byte, pb Message) error {
+	pb.Reset()
+	v := reflect.ValueOf(pb)
+	t := v.Type().Elem()
+	u := getUnmarshalInfo(t)
+	m := unsafe.Pointer(v.Pointer())
+	return u.unmarshal(m, buf)
+}
+func UnmarshalMerge(buf []byte, pb Message) error {
+	v := reflect.ValueOf(pb)
+	t := v.Type().Elem()
+	u := getUnmarshalInfo(t)
+	m := unsafe.Pointer(v.Pointer())
+	//m := (*[2]unsafe.Pointer)(unsafe.Pointer(&pb))[1]
+	return u.unmarshal(m, buf)
+}
+func (b *Buffer) DecodeMessage(pb Message) error {
+	if pb == b.lastMsg {
+		return b.lastUnmarshalInfo.unmarshal(b.lastPtr, b.buf)
+	}
+	v := reflect.ValueOf(pb)
+	t := v.Type().Elem()
+	u := getUnmarshalInfo(t)
+	m := unsafe.Pointer(v.Pointer())
+	b.lastMsg = pb
+	b.lastPtr = m
+	b.lastUnmarshalInfo = u
+	return u.unmarshal(m, b.buf)
+}
+func (b *Buffer) DecodeGroup(pb Message) error {
+	panic("DecodeGroup")
+}
+func (b *Buffer) Unmarshal(pb Message) error {
+	if pb == b.lastMsg {
+		return b.lastUnmarshalInfo.unmarshal(b.lastPtr, b.buf)
+	}
+	v := reflect.ValueOf(pb)
+	t := v.Type().Elem()
+	u := getUnmarshalInfo(t)
+	m := unsafe.Pointer(v.Pointer())
+	b.lastMsg = pb
+	b.lastPtr = m
+	b.lastUnmarshalInfo = u
+	return u.unmarshal(m, b.buf)
 }
 
 // Unmarshal is the entry point from the generated .pb.go files.
@@ -1229,6 +1283,7 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 	if atomic.LoadInt32(&u.initialized) == 0 {
 		u.computeUnmarshalInfo()
 	}
+	reqMask := u.reqMask
 	for len(b) > 0 {
 		// Read tag and wire type.
 		// Special case 1 and 2 byte varints.
@@ -1257,8 +1312,16 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 		} else {
 			f = u.sparse[tag]
 		}
+		reqMask &= f.reqMask
 		if fn := f.unmarshal; fn != nil {
-			b = fn(b, unsafe.Pointer(uintptr(m)+f.offset), wire)
+			var err error
+			b, err = fn(b, unsafe.Pointer(uintptr(m)+f.offset), wire)
+			if err != nil {
+				if err == errInternalBadWireType {
+					err = fmt.Errorf("bad wiretype for field at offset %d: got wiretype %d", f.offset, wire)
+				}
+				return err
+			}
 			continue
 		}
 
@@ -1292,7 +1355,7 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 				b = b[uint64(k)+m:]
 			default:
 				// WireStartGroup, WireEndGroup not possible for proto3
-				return io.ErrUnexpectedEOF
+				return fmt.Errorf("proto: can't skip unknown wire type %d for %s", wire, u.typ)
 			}
 		} else {
 			// proto2, keep unrecognized data around.
@@ -1334,9 +1397,12 @@ func (u *UnmarshalInfo) unmarshal(m unsafe.Pointer, b []byte) error {
 				*z = append(*z, b[:i]...)
 				b = b[i:]
 			default:
-				return io.ErrUnexpectedEOF
+				return fmt.Errorf("proto: can't skip unknown wire type %d for %s", wire, u.typ)
 			}
 		}
+	}
+	if reqMask != 0 {
+		return &RequiredNotSetError{"{Unknown}"}
 	}
 	return nil
 }
@@ -1407,12 +1473,15 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 		// Extract unmarshaling function from the field (its type and tags).
 		unmarshal := fieldUnmarshaler(&f)
 
+		// Required field?
+		required := strings.Split(f.Tag.Get("protobuf"), ",")[2] == "req"
+
 		// Store the info in the correct slot in the message.
 		tag, err := strconv.Atoi(strings.Split(f.Tag.Get("protobuf"), ",")[1])
 		if err != nil {
 			panic("protobuf tag field not an integer")
 		}
-		u.setTag(tag, n, f.Offset, unmarshal)
+		u.setTag(tag, n, f.Offset, unmarshal, required)
 	}
 
 	// Find any types associated with oneof fields.
@@ -1440,7 +1509,7 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 					// That lets us know where this struct should be stored
 					// when we encounter it during unmarshaling.
 					unmarshal := makeUnmarshalOneof(typ, of.ityp, baseUnmarshal)
-					u.setTag(tag, n, of.offset, unmarshal)
+					u.setTag(tag, n, of.offset, unmarshal, false)
 				}
 			}
 		}
@@ -1453,8 +1522,16 @@ func (u *UnmarshalInfo) computeUnmarshalInfo() {
 // tag = tag # for field
 // n = number of fields
 // offset/unmarshal = unmarshal info for that field.
-func (u *UnmarshalInfo) setTag(tag int, n int, offset uintptr, unmarshal unmarshaler) {
-	i := unmarshalFieldInfo{offset: offset, unmarshal: unmarshal}
+// required = whether the field is required
+func (u *UnmarshalInfo) setTag(tag int, n int, offset uintptr, unmarshal unmarshaler, required bool) {
+	reqMask := uint64(1<<64 - 1)
+	if required {
+		// We keep track of the first 64 required fields. We give up after that,
+		// so we effectively treat the 65th and beyond required fields as optional.
+		reqMask = (1<<64 - 1) - (u.reqMask + 1)
+		u.reqMask = u.reqMask*2 + 1
+	}
+	i := unmarshalFieldInfo{offset: offset, unmarshal: unmarshal, reqMask: reqMask}
 	if tag >= 0 && (tag < 16 || tag < 2*n) { // TODO: what are the right numbers here?
 		for len(u.dense) <= tag {
 			u.dense = append(u.dense, unmarshalFieldInfo{})
@@ -1479,7 +1556,12 @@ func fieldUnmarshaler(f *reflect.StructField) unmarshaler {
 
 // typeUnmarshaler returns an unmarshaler for the given field type / field tag pair.
 func typeUnmarshaler(t reflect.Type, tags string) unmarshaler {
-	encoding := strings.Split(tags, ",")[0]
+	tagArray := strings.Split(tags, ",")
+	encoding := tagArray[0]
+	var name = "unknown"
+	if len(tagArray) >= 4 && strings.HasPrefix(tagArray[3], "name=") {
+		name = tagArray[3][5:]
+	}
 
 	// Figure out packaging (pointer, slice, or both)
 	slice := false
@@ -1626,14 +1708,14 @@ func typeUnmarshaler(t reflect.Type, tags string) unmarshaler {
 		switch encoding {
 		case "bytes":
 			if slice {
-				return makeUnmarshalMessageSlicePtr(getUnmarshalInfo(t))
+				return makeUnmarshalMessageSlicePtr(getUnmarshalInfo(t), name)
 			}
-			return makeUnmarshalMessagePtr(getUnmarshalInfo(t))
+			return makeUnmarshalMessagePtr(getUnmarshalInfo(t), name)
 		case "group":
 			if slice {
-				return makeUnmarshalGroupSlicePtr(getUnmarshalInfo(t))
+				return makeUnmarshalGroupSlicePtr(getUnmarshalInfo(t), name)
 			}
-			return makeUnmarshalGroupPtr(getUnmarshalInfo(t))
+			return makeUnmarshalGroupPtr(getUnmarshalInfo(t), name)
 		}
 	}
 	panic(fmt.Sprintf("unmarshaler not found type:%s encoding:%s", t, encoding))
@@ -1641,343 +1723,400 @@ func typeUnmarshaler(t reflect.Type, tags string) unmarshaler {
 
 // Below are all the unmarshalers for individual fields of various types.
 
-func unmarshalFloat64Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFloat64Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed64 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 8 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
 	g := (*float64)(f)
 	*g = v
-	return b[8:]
+	return b[8:], nil
 }
 
-func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFloat64Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed64 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 8 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
 	g := (**float64)(f)
 	*g = &v
-	return b[8:]
+	return b[8:], nil
 }
 
-func unmarshalFloat64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFloat64Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]float64)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			if len(b) < 8 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
 			*g = append(*g, v)
 			b = b[8:]
 		}
-		return res
+		return res, nil
+	}
+	if w != WireFixed64 {
+		return nil, errInternalBadWireType
 	}
 	if len(b) < 8 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := math.Float64frombits(uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56)
 	*g = append(*g, v)
-	return b[8:]
+	return b[8:], nil
 }
 
-func unmarshalFloat32Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFloat32Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed32 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 4 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
 	g := (*float32)(f)
 	*g = v
-	return b[4:]
+	return b[4:], nil
 }
 
-func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFloat32Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed32 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 4 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
 	g := (**float32)(f)
 	*g = &v
-	return b[4:]
+	return b[4:], nil
 }
 
-func unmarshalFloat32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFloat32Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]float32)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			if len(b) < 4 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
 			*g = append(*g, v)
 			b = b[4:]
 		}
-		return res
+		return res, nil
+	}
+	if w != WireFixed32 {
+		return nil, errInternalBadWireType
 	}
 	if len(b) < 4 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
 	*g = append(*g, v)
-	return b[4:]
+	return b[4:], nil
 }
 
-func unmarshalInt64Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalInt64Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int64(x)
 	g := (*int64)(f)
 	*g = v
-	return b
+	return b, nil
 }
 
-func unmarshalInt64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalInt64Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int64(x)
 	g := (**int64)(f)
 	*g = &v
-	return b
+	return b, nil
 }
 
-func unmarshalInt64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalInt64Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]int64)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			x, n = DecodeVarint(b)
 			if n == 0 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			b = b[n:]
 			v := int64(x)
 			*g = append(*g, v)
 		}
-		return res
+		return res, nil
+	}
+	if w != WireVarint {
+		return nil, errInternalBadWireType
 	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int64(x)
 	*g = append(*g, v)
-	return b
+	return b, nil
 }
 
-func unmarshalSint64Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalSint64Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
 	g := (*int64)(f)
 	*g = v
-	return b
+	return b, nil
 }
 
-func unmarshalSint64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalSint64Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
 	g := (**int64)(f)
 	*g = &v
-	return b
+	return b, nil
 }
 
-func unmarshalSint64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalSint64Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]int64)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			x, n = DecodeVarint(b)
 			if n == 0 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			b = b[n:]
 			v := int64(x>>1) ^ int64(x)<<63>>63
 			*g = append(*g, v)
 		}
-		return res
+		return res, nil
+	}
+	if w != WireVarint {
+		return nil, errInternalBadWireType
 	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int64(x>>1) ^ int64(x)<<63>>63
 	*g = append(*g, v)
-	return b
+	return b, nil
 }
 
-func unmarshalInt32Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalInt32Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int32(x)
 	g := (*int32)(f)
 	*g = v
-	return b
+	return b, nil
 }
 
-func unmarshalInt32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalInt32Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int32(x)
 	g := (**int32)(f)
 	*g = &v
-	return b
+	return b, nil
 }
 
-func unmarshalInt32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalInt32Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]int32)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			x, n = DecodeVarint(b)
 			if n == 0 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			b = b[n:]
 			v := int32(x)
 			*g = append(*g, v)
 		}
-		return res
+		return res, nil
+	}
+	if w != WireVarint {
+		return nil, errInternalBadWireType
 	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int32(x)
 	*g = append(*g, v)
-	return b
+	return b, nil
 }
 
-func unmarshalSint32Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalSint32Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
 	g := (*int32)(f)
 	*g = v
-	return b
+	return b, nil
 }
 
-func unmarshalSint32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalSint32Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
 	g := (**int32)(f)
 	*g = &v
-	return b
+	return b, nil
 }
 
-func unmarshalSint32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalSint32Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]int32)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			x, n = DecodeVarint(b)
 			if n == 0 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			b = b[n:]
 			v := int32(x>>1) ^ int32(x)<<31>>31
 			*g = append(*g, v)
 		}
-		return res
+		return res, nil
+	}
+	if w != WireVarint {
+		return nil, errInternalBadWireType
 	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	v := int32(x>>1) ^ int32(x)<<31>>31
 	*g = append(*g, v)
-	return b
+	return b, nil
 }
 
-func unmarshalBoolValue(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalBoolValue(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 1 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := false
 	if b[0] != 0 {
@@ -1985,12 +2124,15 @@ func unmarshalBoolValue(b []byte, f unsafe.Pointer, w int) []byte {
 	}
 	g := (*bool)(f)
 	*g = v
-	return b[1:]
+	return b[1:], nil
 }
 
-func unmarshalBoolPtr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalBoolPtr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireVarint {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 1 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := false
 	if b[0] != 0 {
@@ -1998,19 +2140,19 @@ func unmarshalBoolPtr(b []byte, f unsafe.Pointer, w int) []byte {
 	}
 	g := (**bool)(f)
 	*g = &v
-	return b[1:]
+	return b[1:], nil
 }
 
-func unmarshalBoolSlice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalBoolSlice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]bool)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
@@ -2022,271 +2164,334 @@ func unmarshalBoolSlice(b []byte, f unsafe.Pointer, w int) []byte {
 			*g = append(*g, v)
 			b = b[1:]
 		}
-		return res
+		return res, nil
+	}
+	if w != WireVarint {
+		return nil, errInternalBadWireType
 	}
 	if len(b) < 1 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := false
 	if b[0] != 0 {
 		v = true
 	}
 	*g = append(*g, v)
-	return b[1:]
+	return b[1:], nil
 }
 
-func unmarshalFixed64Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFixed64Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed64 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 8 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 	g := (*uint64)(f)
 	*g = v
-	return b[8:]
+	return b[8:], nil
 }
 
-func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFixed64Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed64 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 8 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 	g := (**uint64)(f)
 	*g = &v
-	return b[8:]
+	return b[8:], nil
 }
 
-func unmarshalFixed64Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFixed64Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]uint64)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			if len(b) < 8 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 			*g = append(*g, v)
 			b = b[8:]
 		}
-		return res
+		return res, nil
+	}
+	if w != WireFixed64 {
+		return nil, errInternalBadWireType
 	}
 	if len(b) < 8 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 | uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 	*g = append(*g, v)
-	return b[8:]
+	return b[8:], nil
 }
 
-func unmarshalFixed32Value(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFixed32Value(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed32 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 4 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 	g := (*uint32)(f)
 	*g = v
-	return b[4:]
+	return b[4:], nil
 }
 
-func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFixed32Ptr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireFixed32 {
+		return nil, errInternalBadWireType
+	}
 	if len(b) < 4 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 	g := (**uint32)(f)
 	*g = &v
-	return b[4:]
+	return b[4:], nil
 }
 
-func unmarshalFixed32Slice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalFixed32Slice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 	g := (*[]uint32)(f)
 	if w == WireBytes { // packed
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		res := b[x:]
 		b = b[:x]
 		for len(b) > 0 {
 			if len(b) < 4 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 			*g = append(*g, v)
 			b = b[4:]
 		}
-		return res
+		return res, nil
+	}
+	if w != WireFixed32 {
+		return nil, errInternalBadWireType
 	}
 	if len(b) < 4 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 	*g = append(*g, v)
-	return b[4:]
+	return b[4:], nil
 }
 
-func unmarshalStringValue(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalStringValue(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireBytes {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	if x > uint64(len(b)) {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := string(b[:x])
 	g := (*string)(f)
 	*g = v
-	return b[x:]
+	return b[x:], nil
 }
 
-func unmarshalStringPtr(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalStringPtr(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireBytes {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	if x > uint64(len(b)) {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := string(b[:x])
 	g := (**string)(f)
 	*g = &v
-	return b[x:]
+	return b[x:], nil
 }
 
-func unmarshalStringSlice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalStringSlice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireBytes {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	if x > uint64(len(b)) {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := string(b[:x])
 	g := (*[]string)(f)
 	*g = append(*g, v)
-	return b[x:]
+	return b[x:], nil
 }
 
-func unmarshalBytesValue(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalBytesValue(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireBytes {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	if x > uint64(len(b)) {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := make([]byte, x)
 	copy(v, b)
 	g := (*[]byte)(f)
 	*g = v
-	return b[x:]
+	return b[x:], nil
 }
 
-func unmarshalBytesSlice(b []byte, f unsafe.Pointer, w int) []byte {
+func unmarshalBytesSlice(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+	if w != WireBytes {
+		return nil, errInternalBadWireType
+	}
 	x, n := DecodeVarint(b)
 	if n == 0 {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	b = b[n:]
 	if x > uint64(len(b)) {
-		return errorData[:]
+		return nil, io.ErrUnexpectedEOF
 	}
 	v := make([]byte, x)
 	copy(v, b)
 	g := (*[][]byte)(f)
 	*g = append(*g, v)
-	return b[x:]
+	return b[x:], nil
 }
 
-func makeUnmarshalMessagePtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer, w int) []byte {
+func makeUnmarshalMessagePtr(sub *UnmarshalInfo, name string) unmarshaler {
+	return func(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+		if w != WireBytes {
+			return nil, errInternalBadWireType
+		}
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
-		}
-		v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
-		err := sub.unmarshal(v, b[:x])
-		if err != nil {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		g := (*unsafe.Pointer)(f)
-		*g = v
-		return b[x:]
+		v := *g
+		if v == nil {
+			v = unsafe.Pointer(reflect.New(sub.typ).Pointer())
+			*g = v
+		}
+		err := sub.unmarshal(v, b[:x])
+		if err != nil {
+			if rnse, ok := err.(*RequiredNotSetError); ok {
+				rnse.field = name + "." + rnse.field
+			}
+			return nil, err
+		}
+		return b[x:], nil
 	}
 }
 
-func makeUnmarshalMessageSlicePtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer, w int) []byte {
+func makeUnmarshalMessageSlicePtr(sub *UnmarshalInfo, name string) unmarshaler {
+	return func(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+		if w != WireBytes {
+			return nil, errInternalBadWireType
+		}
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
 		err := sub.unmarshal(v, b[:x])
 		if err != nil {
-			return errorData[:]
+			if rnse, ok := err.(*RequiredNotSetError); ok {
+				rnse.field = name + "." + rnse.field
+			}
+			return nil, err
 		}
 		g := (*[]unsafe.Pointer)(f)
 		*g = append(*g, v)
-		return b[x:]
+		return b[x:], nil
 	}
 }
 
-func makeUnmarshalGroupPtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer, w int) []byte {
+func makeUnmarshalGroupPtr(sub *UnmarshalInfo, name string) unmarshaler {
+	return func(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+		if w != WireStartGroup {
+			return nil, errInternalBadWireType
+		}
 		x, y := FindEndGroup(b)
 		if x < 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
 		err := sub.unmarshal(v, b[:x])
 		if err != nil {
-			return errorData[:]
+			if rnse, ok := err.(*RequiredNotSetError); ok {
+				rnse.field = name + "." + rnse.field
+			}
+			return nil, err
 		}
 		g := (*unsafe.Pointer)(f)
 		*g = v
-		return b[y:]
+		return b[y:], nil
 	}
 }
 
-func makeUnmarshalGroupSlicePtr(sub *UnmarshalInfo) unmarshaler {
-	return func(b []byte, f unsafe.Pointer, w int) []byte {
+func makeUnmarshalGroupSlicePtr(sub *UnmarshalInfo, name string) unmarshaler {
+	return func(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
+		if w != WireStartGroup {
+			return nil, errInternalBadWireType
+		}
 		x, y := FindEndGroup(b)
 		if x < 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		v := unsafe.Pointer(reflect.New(sub.typ).Pointer())
 		err := sub.unmarshal(v, b[:x])
 		if err != nil {
-			return errorData[:]
+			if rnse, ok := err.(*RequiredNotSetError); ok {
+				rnse.field = name + "." + rnse.field
+			}
+			return nil, err
 		}
 		g := (*[]unsafe.Pointer)(f)
 		*g = append(*g, v)
-		return b[y:]
+		return b[y:], nil
 	}
 }
 
@@ -2294,15 +2499,18 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 	t := f.Type
 	unmarshalKey := typeUnmarshaler(f.Type.Key(), f.Tag.Get("protobuf_key"))
 	unmarshalVal := typeUnmarshaler(f.Type.Elem(), f.Tag.Get("protobuf_val"))
-	return func(b []byte, f unsafe.Pointer, w int) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 		// The map entry is a submessage. Figure out how big it is.
+		if w != WireBytes {
+			return nil, fmt.Errorf("bad wiretype for map field: got %d want %d", w, WireBytes)
+		}
 		x, n := DecodeVarint(b)
 		if n == 0 {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		b = b[n:]
 		if x > uint64(len(b)) {
-			return errorData[:]
+			return nil, io.ErrUnexpectedEOF
 		}
 		r := b[x:] // unused data to return
 		b = b[:x]  // data for map entry
@@ -2317,14 +2525,24 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 		for len(b) > 0 {
 			x, n := DecodeVarint(b)
 			if n == 0 {
-				return errorData[:]
+				return nil, io.ErrUnexpectedEOF
 			}
 			b = b[n:]
 			switch x >> 3 {
 			case 1:
-				b = unmarshalKey(b, unsafe.Pointer(k.Pointer()), int(x)&7)
+				var err error
+				b, err = unmarshalKey(b, unsafe.Pointer(k.Pointer()), int(x)&7)
+				if err != nil {
+					return nil, err
+				}
 			case 2:
-				b = unmarshalVal(b, unsafe.Pointer(v.Pointer()), int(x)&7)
+				var err error
+				b, err = unmarshalVal(b, unsafe.Pointer(v.Pointer()), int(x)&7)
+				if err != nil {
+					return nil, err
+				}
+			default:
+				// TODO: skip unknown tags
 			}
 		}
 
@@ -2337,7 +2555,7 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 		// Insert into map.
 		m.SetMapIndex(k.Elem(), v.Elem())
 
-		return r
+		return r, nil
 	}
 }
 
@@ -2354,18 +2572,22 @@ func makeUnmarshalMap(f *reflect.StructField) unmarshaler {
 // unmarshal is the unmarshaler for the base type of the oneof case (e.g. int64).
 // Note that this function will be called once for each case in the oneof.
 func makeUnmarshalOneof(typ, ityp reflect.Type, unmarshal unmarshaler) unmarshaler {
-	return func(b []byte, f unsafe.Pointer, w int) []byte {
+	return func(b []byte, f unsafe.Pointer, w int) ([]byte, error) {
 		// Allocate holder for value.
 		v := reflect.New(typ)
 
 		// Unmarshal data into holder.
 		// The holder only has one field, so the field location is
 		// the same as the holder itself.
-		b = unmarshal(b, unsafe.Pointer(v.Pointer()), w)
+		var err error
+		b, err = unmarshal(b, unsafe.Pointer(v.Pointer()), w)
+		if err != nil {
+			return nil, err
+		}
 
 		// Write pointer to holder into target field.
 		reflect.NewAt(ityp, f).Elem().Set(v)
 
-		return b
+		return b, nil
 	}
 }
