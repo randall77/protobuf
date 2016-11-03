@@ -49,6 +49,15 @@ import (
 	"unsafe"
 )
 
+// UnmarshalKind is for benchmark testing.  TODO: remove!
+const (
+	UnmarshalStd   = 0
+	UnmarshalTable = 1
+	UnmarshalGen   = 2
+)
+
+var UnmarshalKind int
+
 // errOverflow is returned when an integer is too large to be represented.
 var errOverflow = errors.New("proto: integer overflow")
 
@@ -519,7 +528,7 @@ func (p *Buffer) DecodeGroup2(pb Message) error {
 // unpredictable.
 //
 // Unlike proto.Unmarshal, this does not reset pb before starting to unmarshal.
-func (p *Buffer) Unmarshal2(pb Message) error {
+func (p *Buffer) UnmarshalStd(pb Message) error {
 	// If the object can unmarshal itself, let it.
 	if u, ok := pb.(Unmarshaler); ok {
 		err := u.Unmarshal(p.buf[p.index:])
@@ -1116,6 +1125,72 @@ func SkipUnrecognized(b []byte, x uint64, u *[]byte) []byte {
 	}
 }
 
+// SkipUnrecognized2 parses and skips any unrecognized tag.
+// b is the data stream (before the tag/wiretype has been parsed).
+// u is the place to store the skipped data, or nil if that is not needed.
+// Returns the remaining unparsed bytes.
+// Note: this is a helper function for the fully custom decoder.
+func SkipUnrecognized2(b []byte, u *[]byte) []byte {
+	x, n := DecodeVarint(b)
+	if n == 0 {
+		return errorData[:]
+	}
+	switch x & 7 {
+	case WireVarint:
+		_, k := DecodeVarint(b[n:])
+		if k == 0 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, b[:n+k]...)
+		}
+		return b[n+k:]
+	case WireFixed32:
+		if len(b)-n < 4 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, b[:n+4]...)
+		}
+		return b[n+4:]
+	case WireFixed64:
+		if len(b)-n < 8 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, b[:n+8]...)
+		}
+		return b[n+8:]
+	case WireBytes:
+		m, k := DecodeVarint(b[n:])
+		if k == 0 {
+			return errorData[:]
+		}
+		if uint64(len(b)-n-k) < m {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, b[:uint64(n+k)+m]...)
+		}
+		return b[uint64(n+k)+m:]
+	case WireStartGroup:
+		_, j := FindEndGroup(b[n:])
+		if j < 0 {
+			return errorData[:]
+		}
+		if u != nil {
+			*u = append(*u, b[:n+j]...)
+		}
+		return b[n+j:]
+	default:
+		return errorData[:]
+	}
+}
+
+func (r *RequiredNotSetError) AddParent(name string) {
+	r.field = name + "." + r.field
+}
+
 // This slice of bytes is an invalid varint.
 // Used to indicate an error on return.
 var errorData = [...]byte{128}
@@ -1215,6 +1290,18 @@ func (b *Buffer) DecodeGroup(pb Message) error {
 	panic("DecodeGroup")
 }
 func (b *Buffer) Unmarshal(pb Message) error {
+	switch UnmarshalKind {
+	case UnmarshalStd:
+		return b.UnmarshalStd(pb)
+	case UnmarshalTable:
+		break
+	case UnmarshalGen:
+		type fullGen interface {
+			MergeFullCustom([]byte) error
+		}
+		return pb.(fullGen).MergeFullCustom(b.buf)
+	}
+
 	if pb == b.lastMsg {
 		return b.lastUnmarshalInfo.unmarshal(b.lastPtr, b.buf)
 	}
