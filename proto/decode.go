@@ -56,7 +56,7 @@ const (
 	UnmarshalGen   = 2
 )
 
-var UnmarshalKind int
+var UnmarshalKind = UnmarshalStd
 
 // errOverflow is returned when an integer is too large to be represented.
 var errOverflow = errors.New("proto: integer overflow")
@@ -1507,18 +1507,18 @@ func getUnmarshalInfo(t reflect.Type) *UnmarshalInfo {
 	// We use a cache here just to reduce memory usage.
 	messageLock.Lock()
 	defer messageLock.Unlock()
-	u := messageInfo[t]
+	u := messageMap[t]
 	if u == nil {
 		u = &UnmarshalInfo{typ: t}
 		// Note: we just set the type here. The rest of the fields
 		// will be initialized on first use.
-		messageInfo[t] = u
+		messageMap[t] = u
 	}
 	return u
 }
 
 var messageLock sync.Mutex
-var messageInfo = map[reflect.Type]*UnmarshalInfo{}
+var messageMap = map[reflect.Type]*UnmarshalInfo{}
 
 // computeUnmarshalInfo fills in u with information for use
 // in unmarshaling protocol buffers of type u.typ.

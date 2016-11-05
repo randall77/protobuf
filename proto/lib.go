@@ -328,6 +328,11 @@ type Buffer struct {
 	lastMsg           Message        // the last message we unmarshaled
 	lastPtr           unsafe.Pointer // raw pointer to last message
 	lastUnmarshalInfo *UnmarshalInfo // unmarshal info for last message
+
+	// the last message to be encoded by this buffer.
+	lastEncMsg   Message
+	lastEncPtr   unsafe.Pointer
+	lastSizeInfo *sizeInfo
 }
 
 // NewBuffer allocates a new Buffer and initializes its internal data to

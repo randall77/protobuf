@@ -398,6 +398,8 @@ func genEntry(g *Generator, e Entry) {
 			g.Out()
 			g.P("m.", CamelCase(field.GetName()), "[", keyStar, "v.Key] = ", valStar, "v.Value")
 			g.Out()
+			g.P("continue loop")
+			return
 		}
 		if field.GetLabel() == descriptor.FieldDescriptorProto_LABEL_REPEATED {
 			g.P("m.", fname, "= append(m.", fname, ", v)")
